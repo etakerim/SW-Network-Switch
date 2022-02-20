@@ -1,63 +1,49 @@
-#include <iostream>
-#include <string>
-#include <unordered_map>
-#include <vector>
-
-#include <wx/stattext.h>
-#include <wx/button.h>
-#include <wx/notebook.h>
-#include <wx/textctrl.h>
-#include <wx/listctrl.h>
-#include <wx/spinctrl.h>
-#include <wx/sizer.h>
-#include <wx/panel.h>
-
 #include "switch.hpp"
-#include "PcapLiveDeviceList.h"
-#include "SystemUtils.h"
 
 
+void NetworkSwitch::startup()
+{
+    for (size_t i = 0; i < this->ports.size(); ++i) {
+        this->ports[i] = (
+            pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByName(ifnames[i])
+        );
+        if (this->ports[i] == NULL)
+            throw std::runtime_error("Cannot find interfaces");
 
-static void onPacketArrives(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev, void* cookie)
+        if (!this->ports[i]->open())
+            throw std::runtime_error("Cannot open device");
+    }
+
+    for (size_t i = 0; i < this->ports.size(); ++i) {
+        this->ports[i]->startCapture(NetworkSwitch::traffic, this);
+    }
+}
+
+void NetworkSwitch::shutdown()
+{
+     for (size_t i = 0; i < this->ports.size(); ++i) {
+        if (this->ports[i] != NULL)
+            this->ports[i]->stopCapture();
+    }
+}
+
+void NetworkSwitch::traffic(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev, void* context)
 {
     // extract the stats object form the cookie
     // PacketStats* stats = (PacketStats*)cookie;
-
     // parsed the raw packet
     pcpp::Packet parsedPacket(packet);
-    std::cout << "Packet" << std::endl;
     // collect stats from packet
     // stats->consumePacket(parsedPacket);
     // dev->sendPacket(**iter)
 }
 
 
-
 bool App::OnInit()
 {
     DeviceWindow* frame = new DeviceWindow();
-
-
-    pcpp::PcapLiveDevice* if0 = (
-        pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByName("sw-port0")
-    );
-    pcpp::PcapLiveDevice* if1 = (
-        pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByName("sw-port1")
-    );
-
-    if (if0 == NULL || if1 == NULL) {
-        std::cerr << "Cannot find interfaces" << std::endl;
-        return 1;
-    }
-    
-    if (!if0->open() || !if1->open() ) {
-        std::cerr << "Cannot open device" << std::endl;
-        return 1;
-    }
-
-    if0->startCapture(onPacketArrives, NULL); //&stats);
-    //if0->stopCapture();
     frame->Show(true);
+    frame->runDevice();
     return true;
 }
 
@@ -84,6 +70,15 @@ DeviceWindow::DeviceWindow() : wxFrame(NULL, wxID_ANY, wxT("Softvérový prepín
     sizer->SetMinSize(600, 400);
     sizer->Add(menu, 1, wxEXPAND | wxALL, 5);
     this->SetSizerAndFit(sizer);
+}
+
+void DeviceWindow::runDevice()
+{
+    try {
+        this->netSwitch.startup();
+    } catch(const std::runtime_error& error) {
+        std::cerr << error.what() << std::endl; // TODO: error dialog
+    }
 }
 
 void DeviceWindow::camTablePage(wxPanel* page)
