@@ -29,16 +29,32 @@ public:
 
 wxIMPLEMENT_APP(App);
 
+#define SWITCH_PORTS    2
+enum PDU {EthII = 0, IP, ARP, TCP, UDP, ICMP, HTTP, count};
+const std::array<wxString, PDU::count> protocols{
+    "Ethernet II", "IP", "ARP", "TCP", "UDP", "ICMP", "HTTP"
+};
+typedef std::array<std::array<size_t, PDU::count>, SWITCH_PORTS> TrafficStats;
 
 class NetworkSwitch
 {
 public:
     void startup();
     void shutdown();
-    static void traffic(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev, void* context);
+    void route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort);
+    static void dispatch(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* port, void* context);
+
+    void clearStats();
+    std::vector<std::string> getInterfaceNames() { return ifnames; }
+
+    TrafficStats inboundStats;
+    TrafficStats outboundStats;
+
 private:
-    std::array<pcpp::PcapLiveDevice*, 2> ports;
-    const std::vector<std::string> ifnames{"sw-port0", "sw-port1"};
+    void aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet, size_t port);
+
+    std::array<pcpp::PcapLiveDevice*, SWITCH_PORTS> ports;
+    const std::vector<std::string> ifnames{"P0", "P1"};
 };
 
 
@@ -47,17 +63,18 @@ class DeviceWindow: public wxFrame
 public:
     DeviceWindow();
     void runDevice();
-private:
-    NetworkSwitch netSwitch;
+    void onClose(wxCloseEvent& event);
 
+private:
     void camTablePage(wxPanel* page);
     void statisticsPage(wxPanel* page);
     void filtersPage(wxPanel* page);
     void syslogPage(wxPanel* page);
 
     void clearMACTable(wxCommandEvent& event);
-    void setMACTimeout(wxCommandEvent& event);
-    
+    void setMACTimeout(wxCommandEvent& event); 
+
+    void updateTrafficStats(wxEvent& event);
     void resetTrafficStats(wxCommandEvent& event);
     
     void addTrafficFilter(wxCommandEvent& event);
@@ -66,6 +83,10 @@ private:
 
     void manageSyslogService(wxCommandEvent& event);
     void clearSyslogConsole(wxCommandEvent& event);
+
+    NetworkSwitch netSwitch;
+    wxChoice *portStats;
+    wxListView *stats;
 };
 
 #endif

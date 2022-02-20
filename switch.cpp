@@ -8,15 +8,17 @@ void NetworkSwitch::startup()
             pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByName(ifnames[i])
         );
         if (this->ports[i] == NULL)
-            throw std::runtime_error("Cannot find interfaces");
+            throw std::runtime_error("Cannot find interface");
 
         if (!this->ports[i]->open())
-            throw std::runtime_error("Cannot open device");
+            throw std::runtime_error("Cannot open interface");
     }
 
+    this->ports[0]->startCapture(NetworkSwitch::dispatch, this); // TODO: loop
+    /* TODO:
     for (size_t i = 0; i < this->ports.size(); ++i) {
-        this->ports[i]->startCapture(NetworkSwitch::traffic, this);
-    }
+        this->ports[i]->startCapture(NetworkSwitch::dispatch, this);
+    }*/
 }
 
 void NetworkSwitch::shutdown()
@@ -27,16 +29,54 @@ void NetworkSwitch::shutdown()
     }
 }
 
-void NetworkSwitch::traffic(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev, void* context)
+void NetworkSwitch::dispatch(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev, void* context)
 {
-    // extract the stats object form the cookie
-    // PacketStats* stats = (PacketStats*)cookie;
-    // parsed the raw packet
+    auto netSwitch = (NetworkSwitch*)context;
     pcpp::Packet parsedPacket(packet);
-    // collect stats from packet
-    // stats->consumePacket(parsedPacket);
-    // dev->sendPacket(**iter)
+    netSwitch->route(&parsedPacket, dev);
 }
+
+void NetworkSwitch::clearStats()
+{
+    for (size_t p = 0; p < this->ports.size(); ++p) {
+        for (size_t t = 0; t < this->inboundStats[p].size(); ++t)
+            this->inboundStats[p][t] = 0;
+        for (size_t t = 0; t < this->outboundStats[p].size(); ++t)
+            this->outboundStats[p][t] = 0;
+    }
+}
+
+void NetworkSwitch::aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet, size_t port)
+{
+    if (packet->isPacketOfType(pcpp::Ethernet))
+        statsDir[port][PDU::EthII]++;
+    if (packet->isPacketOfType(pcpp::IPv4) || 
+               packet->isPacketOfType(pcpp::IPv6))
+        statsDir[port][PDU::IP]++;
+    if (packet->isPacketOfType(pcpp::ARP))
+        statsDir[port][PDU::ARP]++;
+    if (packet->isPacketOfType(pcpp::TCP))
+        statsDir[port][PDU::TCP]++;
+    if (packet->isPacketOfType(pcpp::UDP))
+        statsDir[port][PDU::UDP]++;
+    if (packet->isPacketOfType(pcpp::ICMP))
+        statsDir[port][PDU::ICMP]++;
+    if (packet->isPacketOfType(pcpp::HTTP))
+        statsDir[port][PDU::HTTP]++;
+}
+
+void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
+{
+    for (size_t i = 0; i < this->ports.size(); ++i) {
+        if (srcPort != this->ports[i]) {
+            this->aggregateStats(this->outboundStats, packet, i);
+            this->ports[i]->sendPacket(packet);   // TODO: loop sniffing on same interface as capturing
+        } else {
+             this->aggregateStats(this->inboundStats, packet, i);
+        }
+    }
+}
+
 
 
 bool App::OnInit()
@@ -44,6 +84,7 @@ bool App::OnInit()
     DeviceWindow* frame = new DeviceWindow();
     frame->Show(true);
     frame->runDevice();
+    frame->Bind(wxEVT_CLOSE_WINDOW, &DeviceWindow::onClose, frame);
     return true;
 }
 
@@ -70,16 +111,32 @@ DeviceWindow::DeviceWindow() : wxFrame(NULL, wxID_ANY, wxT("Softvérový prepín
     sizer->SetMinSize(600, 400);
     sizer->Add(menu, 1, wxEXPAND | wxALL, 5);
     this->SetSizerAndFit(sizer);
+
+    auto timer = new wxTimer();
+    timer->Bind(wxEVT_TIMER, &DeviceWindow::updateTrafficStats, this);
+    timer->Start(1000);
 }
 
 void DeviceWindow::runDevice()
 {
     try {
         this->netSwitch.startup();
-    } catch(const std::runtime_error& error) {
-        std::cerr << error.what() << std::endl; // TODO: error dialog
+    } catch(const std::runtime_error& error) { 
+        auto dialog = new wxMessageDialog(
+            NULL, wxT("Sieťové rozhranie nebolo nájdené alebo sa nedá otvoriť!"),
+            wxT("Chyba sieťových rozhraní"), wxOK | wxICON_ERROR
+        );
+        dialog->ShowModal();
+        this->Close(true);
     }
 }
+
+void DeviceWindow::onClose(wxCloseEvent& event)
+{
+    this->netSwitch.shutdown();
+    this->Destroy();
+}
+
 
 void DeviceWindow::camTablePage(wxPanel* page)
 {
@@ -108,9 +165,9 @@ void DeviceWindow::camTablePage(wxPanel* page)
     heading->Add(camClear, 0, wxEXPAND | wxALL, 5);
 
     auto camTimerRow = new wxBoxSizer(wxHORIZONTAL);
-    camTimerRow->Add(timerLabel, 2, wxALL, 5);
-    camTimerRow->Add(timerLimit, 2, wxALL, 5);
-    camTimerRow->Add(timerConfirm, 1, wxALL, 5);
+    camTimerRow->Add(timerLabel, 2, wxALIGN_CENTER_VERTICAL | wxALL, 5);
+    camTimerRow->Add(timerLimit, 2, wxALIGN_CENTER_VERTICAL | wxALL, 5);
+    camTimerRow->Add(timerConfirm, 1, wxALIGN_CENTER_VERTICAL | wxALL, 5);
 
     auto layout = new wxBoxSizer(wxVERTICAL);
     layout->Add(heading, 0, wxEXPAND);
@@ -130,33 +187,42 @@ void DeviceWindow::statisticsPage(wxPanel* page)
     title->SetFont(font);
     auto statsReset = new wxButton(page, wxID_ANY, wxT("Vynulovať"));
 
-    auto statistics = new wxListView(page);
-    statistics->AppendColumn("Protokol");
-    statistics->AppendColumn("IN");
-    statistics->AppendColumn("OUT");
-    statistics->SetColumnWidth(0, 250);
-    statistics->SetColumnWidth(1, 150);
-    statistics->SetColumnWidth(2, 150);
+    auto portLabel = new wxStaticText(page, wxID_ANY, wxT("Rozhranie:"));
+    auto ifn = netSwitch.getInterfaceNames();
+    std::vector<wxString> ifnames(ifn.size());
+    for (size_t i = 0; i < ifnames.size(); ++i)
+        ifnames[i] = wxString(ifn[i]);
 
-    const std::vector<wxString> protocols{
-        "Ethernet II", "ARP", "IP", "TCP", "UDP", "ICMP", "HTTP"
-    };
-    for (size_t i = 0; i < protocols.size(); ++i) {
-        statistics->InsertItem(i, protocols[i]);
-        statistics->SetItem(i, 1, "0");
-        statistics->SetItem(i, 2, "0");
-    }
+    this->portStats = new wxChoice(
+        page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 
+        (int)ifnames.size(), &ifnames[0]
+    );
+    this->portStats->SetSelection(0);
+
+    this->stats = new wxListView(page);
+    this->stats->AppendColumn("Protokol");
+    this->stats->AppendColumn("IN");
+    this->stats->AppendColumn("OUT");
+    this->stats->SetColumnWidth(0, 250);
+    this->stats->SetColumnWidth(1, 150);
+    this->stats->SetColumnWidth(2, 150);
 
     auto heading = new wxBoxSizer(wxHORIZONTAL);
     heading->Add(title, 3, wxEXPAND | wxALL, 5);
     heading->Add(statsReset, 1, wxEXPAND | wxALL, 5);
 
+    auto portSelection = new wxBoxSizer(wxHORIZONTAL);
+    portSelection->Add(portLabel, 1, wxALIGN_CENTER_VERTICAL | wxALL, 5);
+    portSelection->Add(this->portStats, 1, wxALIGN_CENTER_VERTICAL | wxALL, 5);
+
     auto layout = new wxBoxSizer(wxVERTICAL);
     layout->Add(heading, 0, wxEXPAND);
-    layout->Add(statistics, 1, wxEXPAND);
+    layout->Add(portSelection);
+    layout->Add(this->stats, 1, wxEXPAND);
     page->SetSizer(layout);
 
     statsReset->Bind(wxEVT_BUTTON, &DeviceWindow::resetTrafficStats, this);
+    portStats->Bind(wxEVT_CHOICE, &DeviceWindow::updateTrafficStats, this);
 }
 
 void DeviceWindow::filtersPage(wxPanel* page)
@@ -265,9 +331,27 @@ void DeviceWindow::setMACTimeout(wxCommandEvent& event)
 
 }
 
+void DeviceWindow::updateTrafficStats(wxEvent& event)
+{
+    // prečítaj štatistiky pre daný port vo výbere wxChoice
+    int port = this->portStats->GetSelection();
+    size_t in, out;
+
+    this->stats->DeleteAllItems();
+    for (size_t i = 0; i < protocols.size(); ++i) {
+        in = netSwitch.inboundStats[port][i];
+        out = netSwitch.outboundStats[port][i];
+
+        this->stats->InsertItem(i, protocols[i]);
+        this->stats->SetItem(i, 1, wxString::Format(wxT("%ld"), in));
+        this->stats->SetItem(i, 2, wxString::Format(wxT("%ld"), out));
+    }
+}
+
 void DeviceWindow::resetTrafficStats(wxCommandEvent& event)
 {
-
+    netSwitch.clearStats();
+    this->updateTrafficStats(event);
 }
 
 void DeviceWindow::addTrafficFilter(wxCommandEvent& event)
