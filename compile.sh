@@ -7,7 +7,7 @@
 
 FILES="switch.cpp"
 EXEC="switch"
-g++ -O2 -g -Wall $FILES `wx-config --cxxflags --libs` \
+g++ -std=c++11 -O2 -g -Wall $FILES `wx-config --cxxflags --libs` \
     -lPcap++ -lPacket++ -lCommon++ -lpcap -lpthread \
     -I/usr/local/include/pcapplusplus \
     -o $EXEC

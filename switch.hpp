@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+#include <set>
 
 #include <wx/stattext.h>
 #include <wx/button.h>
@@ -52,9 +53,11 @@ public:
 
 private:
     void aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet, size_t port);
+    bool isPacketLooping(pcpp::RawPacket* packet);
 
+    const std::vector<std::string> ifnames{"port1", "port2"};
     std::array<pcpp::PcapLiveDevice*, SWITCH_PORTS> ports;
-    const std::vector<std::string> ifnames{"P0", "P1"};
+    std::set<std::vector<uint8_t>> duplicates;
 };
 
 

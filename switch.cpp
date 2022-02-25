@@ -4,9 +4,8 @@
 void NetworkSwitch::startup()
 {
     for (size_t i = 0; i < this->ports.size(); ++i) {
-        this->ports[i] = (
-            pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByName(ifnames[i])
-        );
+        this->ports[i] = pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByName(ifnames[i]);
+
         if (this->ports[i] == NULL)
             throw std::runtime_error("Cannot find interface");
 
@@ -14,31 +13,58 @@ void NetworkSwitch::startup()
             throw std::runtime_error("Cannot open interface");
     }
 
-    this->ports[0]->startCapture(NetworkSwitch::dispatch, this); // TODO: loop
-    /* TODO:
     for (size_t i = 0; i < this->ports.size(); ++i) {
         this->ports[i]->startCapture(NetworkSwitch::dispatch, this);
-    }*/
+    }
 }
 
 void NetworkSwitch::shutdown()
 {
-     for (size_t i = 0; i < this->ports.size(); ++i) {
-        if (this->ports[i] != NULL)
-            this->ports[i]->stopCapture();
+    for (size_t i = 0; i < this->ports.size(); ++i) {
+        this->ports[i]->stopCapture();
+        this->ports[i]->close();
     }
 }
 
 void NetworkSwitch::dispatch(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev, void* context)
 {
     auto netSwitch = (NetworkSwitch*)context;
-    pcpp::Packet parsedPacket(packet);
-    netSwitch->route(&parsedPacket, dev);
+    if (!netSwitch->isPacketLooping(packet)) {
+	    pcpp::Packet parsedPacket(packet);
+        netSwitch->route(&parsedPacket, dev);
+    }
+}
+
+
+void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
+{
+    for (size_t i = 0; i < this->ports.size(); ++i) {
+        if (srcPort != this->ports[i]) {
+            this->aggregateStats(this->outboundStats, packet, i);
+            this->ports[i]->sendPacket(packet);
+        } else {
+            this->aggregateStats(this->inboundStats, packet, i);
+        }
+    }
+}
+
+bool NetworkSwitch::isPacketLooping(pcpp::RawPacket* packet)
+{
+    auto data = packet->getRawData();
+	std::vector<uint8_t> serialized(data, data + packet->getRawDataLen());
+
+	if (this->duplicates.count(serialized)) {
+		this->duplicates.erase(serialized);
+		return true;
+	} else {
+        this->duplicates.insert(serialized);
+        return false;
+    }
 }
 
 void NetworkSwitch::clearStats()
 {
-    for (size_t p = 0; p < this->ports.size(); ++p) {
+    for (size_t p = 0; p < this->ifnames.size(); ++p) {
         for (size_t t = 0; t < this->inboundStats[p].size(); ++t)
             this->inboundStats[p][t] = 0;
         for (size_t t = 0; t < this->outboundStats[p].size(); ++t)
@@ -63,18 +89,6 @@ void NetworkSwitch::aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet,
         statsDir[port][PDU::ICMP]++;
     if (packet->isPacketOfType(pcpp::HTTP))
         statsDir[port][PDU::HTTP]++;
-}
-
-void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
-{
-    for (size_t i = 0; i < this->ports.size(); ++i) {
-        if (srcPort != this->ports[i]) {
-            this->aggregateStats(this->outboundStats, packet, i);
-            this->ports[i]->sendPacket(packet);   // TODO: loop sniffing on same interface as capturing
-        } else {
-             this->aggregateStats(this->inboundStats, packet, i);
-        }
-    }
 }
 
 
