@@ -38,11 +38,25 @@ void NetworkSwitch::dispatch(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev,
 
 void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
 {
+    pcpp::EthLayer* ethLayer = packet->getLayerOfType<pcpp::EthLayer>();
+    if (ethLayer != NULL) {
+        std::cout << std::endl
+            << "Source MAC address: " << ethLayer->getSourceMac() << std::endl
+            << "Destination MAC address: " << ethLayer->getDestMac() << std::endl
+            << "Ether type = 0x" << std::hex << pcpp::netToHost16(ethLayer->getEthHeader()->etherType);
+    }
+
+
     for (size_t i = 0; i < this->ports.size(); ++i) {
         if (srcPort != this->ports[i]) {
             this->aggregateStats(this->outboundStats, packet, i);
             this->ports[i]->sendPacket(packet);
         } else {
+            if (ethLayer != NULL) {
+                std::string mac = ethLayer->getSourceMac().toString();
+                CAMRecord peer = {.port = i, .timer = 60};   // TODO: property change timer
+                this->macTable[mac] = peer;
+            }
             this->aggregateStats(this->inboundStats, packet, i);
         }
     }
@@ -166,13 +180,13 @@ void DeviceWindow::camTablePage(wxPanel* page)
     timerLimit->SetValue(60);
     auto timerConfirm = new wxButton(page, wxID_ANY, wxT("OK"));
 
-    auto cam = new wxListView(page);
-    cam->AppendColumn(wxT("MAC adresa"));
-    cam->AppendColumn(wxT("Port"));
-    cam->AppendColumn(wxT("Časovač"));
-    cam->SetColumnWidth(0, 250);
-    cam->SetColumnWidth(1, 150);
-    cam->SetColumnWidth(2, 150);
+    this->cam = new wxListView(page);
+    this->cam->AppendColumn(wxT("MAC adresa"));
+    this->cam->AppendColumn(wxT("Port"));
+    this->cam->AppendColumn(wxT("Časovač"));
+    this->cam->SetColumnWidth(0, 250);
+    this->cam->SetColumnWidth(1, 150);
+    this->cam->SetColumnWidth(2, 150);
 
     auto heading = new wxBoxSizer(wxHORIZONTAL);
     heading->Add(title, 2, wxEXPAND | wxALL, 5);
@@ -186,7 +200,7 @@ void DeviceWindow::camTablePage(wxPanel* page)
     auto layout = new wxBoxSizer(wxVERTICAL);
     layout->Add(heading, 0, wxEXPAND);
     layout->Add(camTimerRow);
-    layout->Add(cam, 1, wxEXPAND);
+    layout->Add(this->cam, 1, wxEXPAND);
     page->SetSizer(layout);
 
     camClear->Bind(wxEVT_BUTTON, &DeviceWindow::clearMACTable, this);
@@ -360,6 +374,18 @@ void DeviceWindow::updateTrafficStats(wxEvent& event)
         this->stats->SetItem(i, 1, wxString::Format(wxT("%ld"), in));
         this->stats->SetItem(i, 2, wxString::Format(wxT("%ld"), out));
     }
+
+    // CAM table
+    this->cam->DeleteAllItems();
+    int i = 0;
+    for (auto& it: this->netSwitch.macTable) {
+        CAMRecord peer = it.second;
+        this->cam->InsertItem(i, it.first);
+        this->cam->SetItem(i, 1,  this->netSwitch.ifnames[peer.port]);
+        this->cam->SetItem(i, 2,  wxString::Format(wxT("%ld"), peer.timer));
+        i++;
+    }
+
 }
 
 void DeviceWindow::resetTrafficStats(wxCommandEvent& event)

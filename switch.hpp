@@ -18,6 +18,13 @@
 #include <wx/sizer.h>
 #include <wx/panel.h>
 
+#include "Packet.h"
+#include "EthLayer.h"
+#include "IPv4Layer.h"
+#include "TcpLayer.h"
+#include "HttpLayer.h"
+#include "PcapFileDevice.h"
+
 #include "PcapLiveDeviceList.h"
 #include "SystemUtils.h"
 
@@ -37,6 +44,11 @@ const std::array<wxString, PDU::count> protocols{
 };
 typedef std::array<std::array<size_t, PDU::count>, SWITCH_PORTS> TrafficStats;
 
+struct CAMRecord {
+    size_t port;
+    size_t timer;
+};
+
 class NetworkSwitch
 {
 public:
@@ -50,12 +62,13 @@ public:
 
     TrafficStats inboundStats;
     TrafficStats outboundStats;
+    const std::vector<std::string> ifnames{"port1", "port2"};
+    std::unordered_map<std::string, CAMRecord> macTable;
 
 private:
     void aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet, size_t port);
     bool isPacketLooping(pcpp::RawPacket* packet);
 
-    const std::vector<std::string> ifnames{"port1", "port2"};
     std::array<pcpp::PcapLiveDevice*, SWITCH_PORTS> ports;
     std::set<std::vector<uint8_t>> duplicates;
 };
@@ -90,6 +103,7 @@ private:
     NetworkSwitch netSwitch;
     wxChoice *portStats;
     wxListView *stats;
+    wxListView *cam;
 };
 
 #endif
