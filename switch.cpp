@@ -207,6 +207,17 @@ void DeviceWindow::camTablePage(wxPanel* page)
     timerConfirm->Bind(wxEVT_BUTTON, &DeviceWindow::setMACTimeout, this);
 }
 
+std::vector<wxString> DeviceWindow::displayInterfaces()
+{
+    auto ifn = this->netSwitch.getInterfaceNames();
+    std::vector<wxString> ifnames(ifn.size());
+
+    for (size_t i = 0; i < ifnames.size(); ++i)
+        ifnames[i] = wxString(ifn[i]);
+
+    return ifnames;
+}
+
 void DeviceWindow::statisticsPage(wxPanel* page)
 {
     auto title = new wxStaticText(page, wxID_ANY, wxT("Štatistiky premávky"));
@@ -216,10 +227,7 @@ void DeviceWindow::statisticsPage(wxPanel* page)
     auto statsReset = new wxButton(page, wxID_ANY, wxT("Vynulovať"));
 
     auto portLabel = new wxStaticText(page, wxID_ANY, wxT("Rozhranie:"));
-    auto ifn = netSwitch.getInterfaceNames();
-    std::vector<wxString> ifnames(ifn.size());
-    for (size_t i = 0; i < ifnames.size(); ++i)
-        ifnames[i] = wxString(ifn[i]);
+    auto ifnames = this->displayInterfaces();
 
     this->portStats = new wxChoice(
         page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 
@@ -255,49 +263,91 @@ void DeviceWindow::statisticsPage(wxPanel* page)
 
 void DeviceWindow::filtersPage(wxPanel* page)
 {
-    auto filterAddrLabel = new wxStaticText(page, wxID_ANY, wxT("MAC / IP adresa:"));
-    auto filterDirLabel = new wxStaticText(page, wxID_ANY, wxT("Smer:"));
-    auto filterProtoLabel = new wxStaticText(page, wxID_ANY, wxT("Protokol:"));
+    auto ifaceLabel = new wxStaticText(page, wxID_ANY, wxT("Rozhranie:"));
+    auto dirLabel = new wxStaticText(page, wxID_ANY, wxT("Smer:"));
 
-    auto filterAddr = new wxTextCtrl(page, wxID_ANY);
+    auto newRuleLabel = new wxStaticText(page, wxID_ANY, wxT("Nové ACL pravidlo:"));
+    auto font = newRuleLabel->GetFont();
+    font.SetPointSize(13);
+    newRuleLabel->SetFont(font);
+
+    auto macSrcLabel = new wxStaticText(page, wxID_ANY, wxT("Zdrojová MAC adresa:"));
+    auto macDstLabel = new wxStaticText(page, wxID_ANY, wxT("Cieľová MAC adresa:"));
+    auto ipSrcLabel = new wxStaticText(page, wxID_ANY, wxT("Zdrojová IP adresa:"));
+    auto ipDstLabel = new wxStaticText(page, wxID_ANY, wxT("Cieľová IP adresa:"));
+    auto portSrcLabel = new wxStaticText(page, wxID_ANY, wxT("Zdrojový TCP/UDP port:"));
+    auto portDstLabel = new wxStaticText(page, wxID_ANY, wxT("Cieľový TCP/UDP port:"));
+    auto icmpMsgLabel = new wxStaticText(page, wxID_ANY, wxT("ICMP typ správy:"));
+
+    auto ifaces = this->displayInterfaces();
     wxString directions[] = {"IN", "OUT"};
-    auto filterDir = new wxChoice(
-        page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, directions
-    );
-    wxString protocols[] = {
-        "Ethernet II", "ARP", "IP", "TCP", "UDP", "ICMP", "HTTP"
-    };
-    auto filterProto = new wxChoice(
-        page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 7, protocols
-    );
+    wxString icmpMessages[] = {"Request", "Reply"};
+
+    auto filterIface = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, &ifaces[0]);
+    auto filterDir = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, directions);
+    auto filterMacSrc = new wxTextCtrl(page, wxID_ANY);
+    auto filterMacDst = new wxTextCtrl(page, wxID_ANY);
+    auto filterIpSrc = new wxTextCtrl(page, wxID_ANY);
+    auto filterIpDst = new wxTextCtrl(page, wxID_ANY);
+    auto filterPortSrc = new wxTextCtrl(page, wxID_ANY);
+    auto filterPortDst = new wxTextCtrl(page, wxID_ANY);
+    auto icmpMsg = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, icmpMessages);
     auto filterAddRule = new wxButton(page, wxID_ANY, wxT("Pridať pravidlo"));
 
     auto filterRules = new wxListView(page);
-    filterRules->AppendColumn("IP / MAC adresa");
-    filterRules->AppendColumn("Smer");
-    filterRules->AppendColumn("Protokol");
-    filterRules->SetColumnWidth(0, 250);
-    filterRules->SetColumnWidth(1, 100);
-    filterRules->SetColumnWidth(2, 150);
+    filterRules->AppendColumn("MAC Src");
+    filterRules->AppendColumn("MAC Dst");
+    filterRules->AppendColumn("IP Src");
+    filterRules->AppendColumn("IP Dst");
+    filterRules->AppendColumn("Port Src");
+    filterRules->AppendColumn("Port Dst");
+    filterRules->AppendColumn("ICMP type");
+    // filterRules->SetColumnWidth(0, 250);
 
     auto filterClearOne = new wxButton(page, wxID_ANY, wxT("Zmazať zvolené"));
     auto filterClearAll = new wxButton(page, wxID_ANY, wxT("Zmazať všetky"));
 
-    auto filterNewRule = new wxFlexGridSizer(4, 2, 10, 10);
-    filterNewRule->Add(filterAddrLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterAddr, 2, wxEXPAND);
-    filterNewRule->Add(filterDirLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterDir, 2, wxEXPAND);
-    filterNewRule->Add(filterProtoLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterProto, 2, wxEXPAND);
-    filterNewRule->Add(filterAddRule, 1, wxEXPAND);
+    auto filterNewRule = new wxFlexGridSizer(12, 2, 10, 10);
+    filterNewRule->Add(ifaceLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(filterIface, 1, wxEXPAND);
+    
+    filterNewRule->Add(dirLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(filterDir, 1, wxEXPAND);
+
+    filterNewRule->Add(newRuleLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->AddSpacer(1);
+
+    filterNewRule->Add(macSrcLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(filterMacSrc, 1, wxEXPAND);
+
+    filterNewRule->Add(macDstLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(filterMacDst, 1, wxEXPAND);
+    
+    filterNewRule->Add(ipSrcLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(filterIpSrc, 1, wxEXPAND);
+    
+    filterNewRule->Add(ipDstLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(filterIpDst, 1, wxEXPAND);
+    
+    filterNewRule->Add(portSrcLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(filterPortSrc, 1, wxEXPAND);
+    
+    filterNewRule->Add(portDstLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(filterPortDst, 1, wxEXPAND);
+
+    filterNewRule->Add(icmpMsgLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(icmpMsg, 1, wxEXPAND);
+
+    filterNewRule->AddSpacer(1);
+    filterNewRule->Add(filterAddRule, 2, wxEXPAND);
+    filterNewRule->AddGrowableCol(1, 0);
 
     auto filterClear = new wxBoxSizer(wxHORIZONTAL);
     filterClear->Add(filterClearOne);
     filterClear->Add(filterClearAll);
 
     auto layout = new wxBoxSizer(wxVERTICAL);
-    layout->Add(filterNewRule, 0, wxALL, 5);
+    layout->Add(filterNewRule, 0, wxEXPAND | wxALL, 5);
     layout->Add(filterRules, 1, wxEXPAND);
     layout->Add(filterClear, 0, wxEXPAND);
     page->SetSizer(layout);
@@ -347,21 +397,8 @@ void DeviceWindow::syslogPage(wxPanel* page)
     syslogClear->Bind(wxEVT_BUTTON, &DeviceWindow::clearSyslogConsole, this);
 }
 
-
-void DeviceWindow::clearMACTable(wxCommandEvent& event)
+void DeviceWindow::refreshTrafficStats()
 {
-    std::cout << "Tlačidlo" << std::endl;
-    //Close(true);
-}
-
-void DeviceWindow::setMACTimeout(wxCommandEvent& event)
-{
-
-}
-
-void DeviceWindow::updateTrafficStats(wxEvent& event)
-{
-    // prečítaj štatistiky pre daný port vo výbere wxChoice
     int port = this->portStats->GetSelection();
     size_t in, out;
 
@@ -374,8 +411,10 @@ void DeviceWindow::updateTrafficStats(wxEvent& event)
         this->stats->SetItem(i, 1, wxString::Format(wxT("%ld"), in));
         this->stats->SetItem(i, 2, wxString::Format(wxT("%ld"), out));
     }
+}
 
-    // CAM table
+void DeviceWindow::refreshCAMTable()
+{
     this->cam->DeleteAllItems();
     int i = 0;
     for (auto& it: this->netSwitch.macTable) {
@@ -385,7 +424,25 @@ void DeviceWindow::updateTrafficStats(wxEvent& event)
         this->cam->SetItem(i, 2,  wxString::Format(wxT("%ld"), peer.timer));
         i++;
     }
+}
 
+
+void DeviceWindow::clearMACTable(wxCommandEvent& event)
+{
+    this->netSwitch.macTable.clear();
+    this->refreshCAMTable();
+    //Close(true);
+}
+
+void DeviceWindow::setMACTimeout(wxCommandEvent& event)
+{
+
+}
+
+void DeviceWindow::updateTrafficStats(wxEvent& event)
+{
+    this->refreshTrafficStats();
+    this->refreshCAMTable();
 }
 
 void DeviceWindow::resetTrafficStats(wxCommandEvent& event)

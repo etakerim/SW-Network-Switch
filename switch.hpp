@@ -87,6 +87,9 @@ private:
     void filtersPage(wxPanel* page);
     void syslogPage(wxPanel* page);
 
+    void refreshTrafficStats();
+    void refreshCAMTable();
+
     void clearMACTable(wxCommandEvent& event);
     void setMACTimeout(wxCommandEvent& event); 
 
@@ -99,6 +102,8 @@ private:
 
     void manageSyslogService(wxCommandEvent& event);
     void clearSyslogConsole(wxCommandEvent& event);
+
+    std::vector<wxString> displayInterfaces();
 
     NetworkSwitch netSwitch;
     wxChoice *portStats;
