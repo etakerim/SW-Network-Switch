@@ -1,30 +1,55 @@
 #include "switch.hpp"
 
 
+#define PORT_ALIVE_SEC      5
+
 void NetworkSwitch::startup()
 {
     for (size_t i = 0; i < this->ports.size(); ++i) {
-        this->ports[i] = pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByName(ifnames[i]);
+        this->ports[i].dev = pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByName(ifnames[i]);
 
-        if (this->ports[i] == NULL)
+        if (this->ports[i].dev == NULL)
             throw std::runtime_error("Cannot find interface");
 
-        if (!this->ports[i]->open())
+        if (!this->ports[i].dev->open())
             throw std::runtime_error("Cannot open interface");
     }
 
     for (size_t i = 0; i < this->ports.size(); ++i) {
-        this->ports[i]->startCapture(NetworkSwitch::dispatch, this);
+        this->ports[i].dev->startCapture(NetworkSwitch::dispatch, this);
+        this->ports[i].age = 0;
+        this->ports[i].up = true;
     }
 }
 
 void NetworkSwitch::shutdown()
 {
     for (size_t i = 0; i < this->ports.size(); ++i) {
-        this->ports[i]->stopCapture();
-        this->ports[i]->close();
+        this->ports[i].dev->stopCapture();
+        this->ports[i].dev->close();
     }
 }
+
+void NetworkSwitch::timer()
+{
+    macTableMutex.lock();
+    for (size_t i = 0; i < this->ports.size(); ++i)
+        this->ports[i].age++;
+
+    for (auto record = this->macTable.begin(); record != this->macTable.end();) {
+        record->second.age++;
+        if (this->ports[record->second.port].age > PORT_ALIVE_SEC) {
+            this->ports[record->second.port].up = false;
+            record = this->macTable.erase(record);
+        } else if (record->second.age > this->macTimeout) {
+            record = this->macTable.erase(record);
+        } else {
+            record++;
+        }
+    }
+    macTableMutex.unlock();
+}
+
 
 void NetworkSwitch::dispatch(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev, void* context)
 {
@@ -46,20 +71,34 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
             << "Ether type = 0x" << std::hex << pcpp::netToHost16(ethLayer->getEthHeader()->etherType);
     }
 
+    if (ethLayer == NULL)
+        return;
 
+    std::string srcMac = ethLayer->getSourceMac().toString();
+    std::string dstMac = ethLayer->getDestMac().toString();
+
+    macTableMutex.lock();
+    auto record = macTable.find(dstMac);
     for (size_t i = 0; i < this->ports.size(); ++i) {
-        if (srcPort != this->ports[i]) {
-            this->aggregateStats(this->outboundStats, packet, i);
-            this->ports[i]->sendPacket(packet);
-        } else {
-            if (ethLayer != NULL) {
-                std::string mac = ethLayer->getSourceMac().toString();
-                CAMRecord peer = {.port = i, .timer = 60};   // TODO: property change timer
-                this->macTable[mac] = peer;
-            }
+        if (srcPort == this->ports[i].dev) {
+            this->ports[i].age = 0;
+            this->ports[i].up = true;
+            // TODO: ACL in
             this->aggregateStats(this->inboundStats, packet, i);
+            CAMRecord peer = {.port = i, .age = 0};
+            this->macTable[srcMac] = peer;
+
+        } else {
+            // unicast nepatriaci na tento port alebo port je down
+            if (!this->ports[i].up || (record != macTable.end() && i != record->second.port))
+                continue;
+
+            // TODO: ACL out
+            this->aggregateStats(this->outboundStats, packet, i);
+            this->ports[i].dev->sendPacket(packet);
         }
     }
+    macTableMutex.unlock();
 }
 
 bool NetworkSwitch::isPacketLooping(pcpp::RawPacket* packet)
@@ -74,6 +113,13 @@ bool NetworkSwitch::isPacketLooping(pcpp::RawPacket* packet)
         this->duplicates.insert(serialized);
         return false;
     }
+}
+
+void NetworkSwitch::clearMACTable()
+{
+    macTableMutex.lock();
+    this->macTable.clear();
+    macTableMutex.unlock();
 }
 
 void NetworkSwitch::clearStats()
@@ -103,6 +149,11 @@ void NetworkSwitch::aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet,
         statsDir[port][PDU::ICMP]++;
     if (packet->isPacketOfType(pcpp::HTTP))
         statsDir[port][PDU::HTTP]++;
+}
+
+std::unordered_map<std::string, CAMRecord> NetworkSwitch::getMACTable()
+{
+    return this->macTable;
 }
 
 
@@ -141,7 +192,7 @@ DeviceWindow::DeviceWindow() : wxFrame(NULL, wxID_ANY, wxT("Softvérový prepín
     this->SetSizerAndFit(sizer);
 
     auto timer = new wxTimer();
-    timer->Bind(wxEVT_TIMER, &DeviceWindow::updateTrafficStats, this);
+    timer->Bind(wxEVT_TIMER, &DeviceWindow::timerTick, this);
     timer->Start(1000);
 }
 
@@ -175,10 +226,11 @@ void DeviceWindow::camTablePage(wxPanel* page)
     auto camClear = new wxButton(page, wxID_ANY, wxT("Vymazať"));
 
     auto timerLabel = new wxStaticText(page, wxID_ANY, wxT("Časovač (s): "));
-    auto timerLimit = new wxSpinCtrl(page, wxID_ANY);
-    timerLimit->SetRange(0, 900);
-    timerLimit->SetValue(60);
-    auto timerConfirm = new wxButton(page, wxID_ANY, wxT("OK"));
+    this->timerLimit = new wxSpinCtrl(page, wxID_ANY);
+    this->timerLimit->SetRange(0, 900);
+    this->timerLimit->SetValue(this->netSwitch.macTimeout);
+    auto timerConfirm = new wxButton(page, wxID_ANY, wxT("Zmeň"));
+    auto timerRefresh = new wxButton(page, wxID_ANY, wxT("Obnov"));
 
     this->cam = new wxListView(page);
     this->cam->AppendColumn(wxT("MAC adresa"));
@@ -196,6 +248,7 @@ void DeviceWindow::camTablePage(wxPanel* page)
     camTimerRow->Add(timerLabel, 2, wxALIGN_CENTER_VERTICAL | wxALL, 5);
     camTimerRow->Add(timerLimit, 2, wxALIGN_CENTER_VERTICAL | wxALL, 5);
     camTimerRow->Add(timerConfirm, 1, wxALIGN_CENTER_VERTICAL | wxALL, 5);
+    camTimerRow->Add(timerRefresh, 1, wxALIGN_CENTER_VERTICAL | wxALL, 5);
 
     auto layout = new wxBoxSizer(wxVERTICAL);
     layout->Add(heading, 0, wxEXPAND);
@@ -203,6 +256,7 @@ void DeviceWindow::camTablePage(wxPanel* page)
     layout->Add(this->cam, 1, wxEXPAND);
     page->SetSizer(layout);
 
+    timerRefresh->Bind(wxEVT_KILL_FOCUS, &DeviceWindow::resetTimeout, this);
     camClear->Bind(wxEVT_BUTTON, &DeviceWindow::clearMACTable, this);
     timerConfirm->Bind(wxEVT_BUTTON, &DeviceWindow::setMACTimeout, this);
 }
@@ -270,44 +324,54 @@ void DeviceWindow::filtersPage(wxPanel* page)
     auto font = newRuleLabel->GetFont();
     font.SetPointSize(13);
     newRuleLabel->SetFont(font);
-
+    
+    auto policyLabel = new wxStaticText(page, wxID_ANY, wxT("Akcia:"));
     auto macSrcLabel = new wxStaticText(page, wxID_ANY, wxT("Zdrojová MAC adresa:"));
     auto macDstLabel = new wxStaticText(page, wxID_ANY, wxT("Cieľová MAC adresa:"));
     auto ipSrcLabel = new wxStaticText(page, wxID_ANY, wxT("Zdrojová IP adresa:"));
     auto ipDstLabel = new wxStaticText(page, wxID_ANY, wxT("Cieľová IP adresa:"));
     auto portSrcLabel = new wxStaticText(page, wxID_ANY, wxT("Zdrojový TCP/UDP port:"));
     auto portDstLabel = new wxStaticText(page, wxID_ANY, wxT("Cieľový TCP/UDP port:"));
-    auto icmpMsgLabel = new wxStaticText(page, wxID_ANY, wxT("ICMP typ správy:"));
+    auto protoLabel = new wxStaticText(page, wxID_ANY, wxT("Protokol:"));
 
     auto ifaces = this->displayInterfaces();
     wxString directions[] = {"IN", "OUT"};
-    wxString icmpMessages[] = {"Request", "Reply"};
+    wxString policies[] = {"ALLOW", "DENY"};
+    wxString protoTypes[] = {"-", "TCP", "UDP", "Echo Reply (0)", "Echo Request (8)"};
 
     auto filterIface = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, &ifaces[0]);
     auto filterDir = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, directions);
+    auto filterPolicy = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, &policies[0]);
     auto filterMacSrc = new wxTextCtrl(page, wxID_ANY);
     auto filterMacDst = new wxTextCtrl(page, wxID_ANY);
     auto filterIpSrc = new wxTextCtrl(page, wxID_ANY);
     auto filterIpDst = new wxTextCtrl(page, wxID_ANY);
     auto filterPortSrc = new wxTextCtrl(page, wxID_ANY);
     auto filterPortDst = new wxTextCtrl(page, wxID_ANY);
-    auto icmpMsg = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, icmpMessages);
+    
+    auto proto = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 5, protoTypes);
     auto filterAddRule = new wxButton(page, wxID_ANY, wxT("Pridať pravidlo"));
+    
+    proto->SetSelection(0);
+    filterIface->SetSelection(0);
+    filterDir->SetSelection(0);
+    filterPolicy->SetSelection(0);
 
     auto filterRules = new wxListView(page);
+    filterRules->AppendColumn("Policy");
     filterRules->AppendColumn("MAC Src");
     filterRules->AppendColumn("MAC Dst");
     filterRules->AppendColumn("IP Src");
     filterRules->AppendColumn("IP Dst");
     filterRules->AppendColumn("Port Src");
     filterRules->AppendColumn("Port Dst");
-    filterRules->AppendColumn("ICMP type");
+    filterRules->AppendColumn("Protocol");
     // filterRules->SetColumnWidth(0, 250);
 
     auto filterClearOne = new wxButton(page, wxID_ANY, wxT("Zmazať zvolené"));
     auto filterClearAll = new wxButton(page, wxID_ANY, wxT("Zmazať všetky"));
 
-    auto filterNewRule = new wxFlexGridSizer(12, 2, 10, 10);
+    auto filterNewRule = new wxFlexGridSizer(13, 2, 10, 10);
     filterNewRule->Add(ifaceLabel, 1, wxALIGN_CENTER_VERTICAL);
     filterNewRule->Add(filterIface, 1, wxEXPAND);
     
@@ -316,6 +380,9 @@ void DeviceWindow::filtersPage(wxPanel* page)
 
     filterNewRule->Add(newRuleLabel, 1, wxALIGN_CENTER_VERTICAL);
     filterNewRule->AddSpacer(1);
+    
+    filterNewRule->Add(policyLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(filterPolicy, 1, wxEXPAND);
 
     filterNewRule->Add(macSrcLabel, 1, wxALIGN_CENTER_VERTICAL);
     filterNewRule->Add(filterMacSrc, 1, wxEXPAND);
@@ -335,8 +402,8 @@ void DeviceWindow::filtersPage(wxPanel* page)
     filterNewRule->Add(portDstLabel, 1, wxALIGN_CENTER_VERTICAL);
     filterNewRule->Add(filterPortDst, 1, wxEXPAND);
 
-    filterNewRule->Add(icmpMsgLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(icmpMsg, 1, wxEXPAND);
+    filterNewRule->Add(protoLabel, 1, wxALIGN_CENTER_VERTICAL);
+    filterNewRule->Add(proto, 1, wxEXPAND);
 
     filterNewRule->AddSpacer(1);
     filterNewRule->Add(filterAddRule, 2, wxEXPAND);
@@ -417,38 +484,54 @@ void DeviceWindow::refreshCAMTable()
 {
     this->cam->DeleteAllItems();
     int i = 0;
-    for (auto& it: this->netSwitch.macTable) {
+    for (auto& it: this->netSwitch.getMACTable()) {
         CAMRecord peer = it.second;
         this->cam->InsertItem(i, it.first);
         this->cam->SetItem(i, 1,  this->netSwitch.ifnames[peer.port]);
-        this->cam->SetItem(i, 2,  wxString::Format(wxT("%ld"), peer.timer));
+        this->cam->SetItem(i, 2,  wxString::Format(wxT("%ld"), peer.age));
         i++;
     }
 }
 
 
+void DeviceWindow::timerTick(wxTimerEvent& event)
+{
+    this->netSwitch.timer();
+    this->refreshTrafficStats();
+    this->refreshCAMTable();
+}
+
+void DeviceWindow::resetTimeout(wxFocusEvent& event)
+{
+    this->timerLimit->SetValue(this->netSwitch.macTimeout);
+    this->timerLimit->SetFocus();
+}
+
 void DeviceWindow::clearMACTable(wxCommandEvent& event)
 {
-    this->netSwitch.macTable.clear();
+    this->netSwitch.clearMACTable();
     this->refreshCAMTable();
-    //Close(true);
 }
 
 void DeviceWindow::setMACTimeout(wxCommandEvent& event)
 {
-
+    this->netSwitch.macTimeout = this->timerLimit->GetValue();
+    auto dialog = new wxMessageDialog(
+        NULL, wxT("Časovač na vypršanie záznamu MAC adries bol zmenený"),
+        wxT("Časovač zmenený"), wxOK | wxICON_INFORMATION
+    );
+    dialog->ShowModal();
 }
 
-void DeviceWindow::updateTrafficStats(wxEvent& event)
+void DeviceWindow::updateTrafficStats(wxCommandEvent& event)
 {
     this->refreshTrafficStats();
-    this->refreshCAMTable();
 }
 
 void DeviceWindow::resetTrafficStats(wxCommandEvent& event)
 {
     netSwitch.clearStats();
-    this->updateTrafficStats(event);
+    this->refreshTrafficStats();
 }
 
 void DeviceWindow::addTrafficFilter(wxCommandEvent& event)

@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 #include <set>
+#include <mutex>
 
 #include <wx/stattext.h>
 #include <wx/button.h>
@@ -46,7 +47,14 @@ typedef std::array<std::array<size_t, PDU::count>, SWITCH_PORTS> TrafficStats;
 
 struct CAMRecord {
     size_t port;
-    size_t timer;
+    size_t age;
+};
+
+struct Interface {
+    pcpp::PcapLiveDevice* dev;
+    size_t port;
+    bool up;
+    unsigned short age;
 };
 
 class NetworkSwitch
@@ -54,22 +62,27 @@ class NetworkSwitch
 public:
     void startup();
     void shutdown();
+    void timer();
     void route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort);
     static void dispatch(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* port, void* context);
-
     void clearStats();
+    void clearMACTable();
+
+    std::unordered_map<std::string, CAMRecord> getMACTable();
     std::vector<std::string> getInterfaceNames() { return ifnames; }
 
     TrafficStats inboundStats;
     TrafficStats outboundStats;
     const std::vector<std::string> ifnames{"port1", "port2"};
-    std::unordered_map<std::string, CAMRecord> macTable;
+    unsigned int macTimeout = 60;
 
 private:
     void aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet, size_t port);
     bool isPacketLooping(pcpp::RawPacket* packet);
 
-    std::array<pcpp::PcapLiveDevice*, SWITCH_PORTS> ports;
+    std::mutex macTableMutex;
+    std::unordered_map<std::string, CAMRecord> macTable;
+    std::array<Interface, SWITCH_PORTS> ports;
     std::set<std::vector<uint8_t>> duplicates;
 };
 
@@ -93,8 +106,10 @@ private:
     void clearMACTable(wxCommandEvent& event);
     void setMACTimeout(wxCommandEvent& event); 
 
-    void updateTrafficStats(wxEvent& event);
+    void timerTick(wxTimerEvent& event);
+    void updateTrafficStats(wxCommandEvent& event);
     void resetTrafficStats(wxCommandEvent& event);
+    void resetTimeout(wxFocusEvent& event);
     
     void addTrafficFilter(wxCommandEvent& event);
     void deleteTrafficFilter(wxCommandEvent& event);
@@ -109,6 +124,7 @@ private:
     wxChoice *portStats;
     wxListView *stats;
     wxListView *cam;
+    wxSpinCtrl *timerLimit;
 };
 
 #endif
