@@ -64,34 +64,49 @@ void NetworkSwitch::dispatch(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev,
 void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
 {
     pcpp::EthLayer* ethLayer = packet->getLayerOfType<pcpp::EthLayer>();
-    if (ethLayer != NULL) {
-        std::cout << std::endl
+    if (ethLayer == NULL)
+        return;
+    /*
+    std::cout << std::endl
             << "Source MAC address: " << ethLayer->getSourceMac() << std::endl
             << "Destination MAC address: " << ethLayer->getDestMac() << std::endl
             << "Ether type = 0x" << std::hex << pcpp::netToHost16(ethLayer->getEthHeader()->etherType);
-    }
-
-    if (ethLayer == NULL)
-        return;
+    */
 
     std::string srcMac = ethLayer->getSourceMac().toString();
     std::string dstMac = ethLayer->getDestMac().toString();
 
     macTableMutex.lock();
     auto record = macTable.find(dstMac);
+    bool unicast = record != macTable.end();
+    bool ignore = this->macAliveTraffic.find(dstMac) != this->macAliveTraffic.end();
+
     for (size_t i = 0; i < this->ports.size(); ++i) {
+
         if (srcPort == this->ports[i].dev) {
+            // FRAME INBOUND
             this->ports[i].age = 0;
             this->ports[i].up = true;
+            if (ignore)
+                continue;
+
             // TODO: ACL in
             this->aggregateStats(this->inboundStats, packet, i);
             CAMRecord peer = {.port = i, .age = 0};
             this->macTable[srcMac] = peer;
 
         } else {
-            // unicast nepatriaci na tento port alebo port je down
-            if (!this->ports[i].up || (record != macTable.end() && i != record->second.port))
+            // FRAME OUTBOUND
+            if (ignore) {
+                this->ports[i].age = 0;
+                this->ports[i].up = true;
+                this->ports[i].dev->sendPacket(packet);
                 continue;
+            }
+
+            if (!this->ports[i].up || (unicast && i != record->second.port)) {
+                continue;
+            }
 
             // TODO: ACL out
             this->aggregateStats(this->outboundStats, packet, i);
@@ -155,7 +170,6 @@ std::unordered_map<std::string, CAMRecord> NetworkSwitch::getMACTable()
 {
     return this->macTable;
 }
-
 
 
 bool App::OnInit()
@@ -225,12 +239,13 @@ void DeviceWindow::camTablePage(wxPanel* page)
     title->SetFont(font);
     auto camClear = new wxButton(page, wxID_ANY, wxT("Vymazať"));
 
-    auto timerLabel = new wxStaticText(page, wxID_ANY, wxT("Časovač (s): "));
+    auto timerLabel = new wxStaticText(page, wxID_ANY, wxT("Časovač: "));
+    this->recordTimeout = new wxStaticText(page, wxID_ANY, wxT(""));
     this->timerLimit = new wxSpinCtrl(page, wxID_ANY);
     this->timerLimit->SetRange(0, 900);
+    this->setTimeoutLabel();
     this->timerLimit->SetValue(this->netSwitch.macTimeout);
-    auto timerConfirm = new wxButton(page, wxID_ANY, wxT("Zmeň"));
-    auto timerRefresh = new wxButton(page, wxID_ANY, wxT("Obnov"));
+    auto timerConfirm = new wxButton(page, wxID_ANY, wxT("Nastav"));
 
     this->cam = new wxListView(page);
     this->cam->AppendColumn(wxT("MAC adresa"));
@@ -245,10 +260,10 @@ void DeviceWindow::camTablePage(wxPanel* page)
     heading->Add(camClear, 0, wxEXPAND | wxALL, 5);
 
     auto camTimerRow = new wxBoxSizer(wxHORIZONTAL);
-    camTimerRow->Add(timerLabel, 2, wxALIGN_CENTER_VERTICAL | wxALL, 5);
-    camTimerRow->Add(timerLimit, 2, wxALIGN_CENTER_VERTICAL | wxALL, 5);
-    camTimerRow->Add(timerConfirm, 1, wxALIGN_CENTER_VERTICAL | wxALL, 5);
-    camTimerRow->Add(timerRefresh, 1, wxALIGN_CENTER_VERTICAL | wxALL, 5);
+    camTimerRow->Add(timerLabel, 1, wxALIGN_CENTER_VERTICAL | wxALL, 5);
+    camTimerRow->Add(recordTimeout, 2, wxALIGN_CENTER_VERTICAL | wxALL, 5);
+    camTimerRow->Add(timerLimit, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL | wxALL, 5);
+    camTimerRow->Add(timerConfirm, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL | wxALL, 5);
 
     auto layout = new wxBoxSizer(wxVERTICAL);
     layout->Add(heading, 0, wxEXPAND);
@@ -256,7 +271,6 @@ void DeviceWindow::camTablePage(wxPanel* page)
     layout->Add(this->cam, 1, wxEXPAND);
     page->SetSizer(layout);
 
-    timerRefresh->Bind(wxEVT_KILL_FOCUS, &DeviceWindow::resetTimeout, this);
     camClear->Bind(wxEVT_BUTTON, &DeviceWindow::clearMACTable, this);
     timerConfirm->Bind(wxEVT_BUTTON, &DeviceWindow::setMACTimeout, this);
 }
@@ -464,6 +478,13 @@ void DeviceWindow::syslogPage(wxPanel* page)
     syslogClear->Bind(wxEVT_BUTTON, &DeviceWindow::clearSyslogConsole, this);
 }
 
+void DeviceWindow::setTimeoutLabel()
+{
+    this->recordTimeout->SetLabel(
+        wxString::Format(wxT("%i s"), this->netSwitch.macTimeout)
+    );
+}
+
 void DeviceWindow::refreshTrafficStats()
 {
     int port = this->portStats->GetSelection();
@@ -501,12 +522,6 @@ void DeviceWindow::timerTick(wxTimerEvent& event)
     this->refreshCAMTable();
 }
 
-void DeviceWindow::resetTimeout(wxFocusEvent& event)
-{
-    this->timerLimit->SetValue(this->netSwitch.macTimeout);
-    this->timerLimit->SetFocus();
-}
-
 void DeviceWindow::clearMACTable(wxCommandEvent& event)
 {
     this->netSwitch.clearMACTable();
@@ -516,6 +531,7 @@ void DeviceWindow::clearMACTable(wxCommandEvent& event)
 void DeviceWindow::setMACTimeout(wxCommandEvent& event)
 {
     this->netSwitch.macTimeout = this->timerLimit->GetValue();
+    this->setTimeoutLabel();
     auto dialog = new wxMessageDialog(
         NULL, wxT("Časovač na vypršanie záznamu MAC adries bol zmenený"),
         wxT("Časovač zmenený"), wxOK | wxICON_INFORMATION

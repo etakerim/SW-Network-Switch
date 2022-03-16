@@ -83,7 +83,10 @@ private:
     std::mutex macTableMutex;
     std::unordered_map<std::string, CAMRecord> macTable;
     std::array<Interface, SWITCH_PORTS> ports;
+
+    // Opravy pre cyklenie rámcov a sledovanie odpojenia linky
     std::set<std::vector<uint8_t>> duplicates;
+    const std::set<std::string> macAliveTraffic {"c2:04:b2:ed:00:00", "c2:05:b3:0e:00:00"};
 };
 
 
@@ -102,6 +105,7 @@ private:
 
     void refreshTrafficStats();
     void refreshCAMTable();
+    void setTimeoutLabel();
 
     void clearMACTable(wxCommandEvent& event);
     void setMACTimeout(wxCommandEvent& event); 
@@ -121,10 +125,11 @@ private:
     std::vector<wxString> displayInterfaces();
 
     NetworkSwitch netSwitch;
-    wxChoice *portStats;
-    wxListView *stats;
-    wxListView *cam;
-    wxSpinCtrl *timerLimit;
+    wxChoice* portStats;
+    wxListView* stats;
+    wxListView* cam;
+    wxSpinCtrl* timerLimit;
+    wxStaticText* recordTimeout;
 };
 
 #endif
