@@ -90,10 +90,11 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
             if (ignore)
                 continue;
 
-            // TODO: ACL in
-            this->aggregateStats(this->inboundStats, packet, i);
-            CAMRecord peer = {.port = i, .age = 0};
-            this->macTable[srcMac] = peer;
+            if (this->checkACL(this->inAcl[i])) {
+                this->aggregateStats(this->inboundStats, packet, i);
+                CAMRecord peer = {.port = i, .age = 0};
+                this->macTable[srcMac] = peer;
+            }
 
         } else {
             // FRAME OUTBOUND
@@ -108,9 +109,10 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
                 continue;
             }
 
-            // TODO: ACL out
-            this->aggregateStats(this->outboundStats, packet, i);
-            this->ports[i].dev->sendPacket(packet);
+            if (this->checkACL(this->outAcl[i])) {
+                this->aggregateStats(this->outboundStats, packet, i);
+                this->ports[i].dev->sendPacket(packet);
+            }
         }
     }
     macTableMutex.unlock();
@@ -169,6 +171,14 @@ void NetworkSwitch::aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet,
 std::unordered_map<std::string, CAMRecord> NetworkSwitch::getMACTable()
 {
     return this->macTable;
+}
+
+bool NetworkSwitch::checkACL(std::vector<ACLRule>& rules)
+{
+    for (auto& rule: rules) {
+        //
+    }
+    return true;
 }
 
 
@@ -349,37 +359,34 @@ void DeviceWindow::filtersPage(wxPanel* page)
     auto protoLabel = new wxStaticText(page, wxID_ANY, wxT("Protokol:"));
 
     auto ifaces = this->displayInterfaces();
-    wxString directions[] = {"IN", "OUT"};
-    wxString policies[] = {"ALLOW", "DENY"};
-    wxString protoTypes[] = {"-", "TCP", "UDP", "Echo Reply (0)", "Echo Request (8)"};
-
-    auto filterIface = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, &ifaces[0]);
-    auto filterDir = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, directions);
-    auto filterPolicy = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, &policies[0]);
-    auto filterMacSrc = new wxTextCtrl(page, wxID_ANY);
-    auto filterMacDst = new wxTextCtrl(page, wxID_ANY);
-    auto filterIpSrc = new wxTextCtrl(page, wxID_ANY);
-    auto filterIpDst = new wxTextCtrl(page, wxID_ANY);
-    auto filterPortSrc = new wxTextCtrl(page, wxID_ANY);
-    auto filterPortDst = new wxTextCtrl(page, wxID_ANY);
-    
-    auto proto = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 5, protoTypes);
+    this->aclNewRule.iface = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, &ifaces[0]);
+    this->aclNewRule.dir = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, this->directionsAcl);
+    this->aclNewRule.policy = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, this->policiesAcl);
+    this->aclNewRule.srcMac = new wxTextCtrl(page, wxID_ANY);
+    this->aclNewRule.dstMac = new wxTextCtrl(page, wxID_ANY);
+    this->aclNewRule.srcIp = new wxTextCtrl(page, wxID_ANY);
+    this->aclNewRule.dstIp = new wxTextCtrl(page, wxID_ANY);
+    this->aclNewRule.srcPort = new wxTextCtrl(page, wxID_ANY);
+    this->aclNewRule.dstPort = new wxTextCtrl(page, wxID_ANY);
+    this->aclNewRule.proto = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 5, this->protoTypesAcl);
     auto filterAddRule = new wxButton(page, wxID_ANY, wxT("Pridať pravidlo"));
     
-    proto->SetSelection(0);
-    filterIface->SetSelection(0);
-    filterDir->SetSelection(0);
-    filterPolicy->SetSelection(0);
+    this->aclNewRule.proto->SetSelection(0);
+    this->aclNewRule.iface->SetSelection(0);
+    this->aclNewRule.dir->SetSelection(0);
+    this->aclNewRule.policy->SetSelection(0);
+    this->filterChooseProtocol();
+    this->filterChooseACL();
 
-    auto filterRules = new wxListView(page);
-    filterRules->AppendColumn("Policy");
-    filterRules->AppendColumn("MAC Src");
-    filterRules->AppendColumn("MAC Dst");
-    filterRules->AppendColumn("IP Src");
-    filterRules->AppendColumn("IP Dst");
-    filterRules->AppendColumn("Port Src");
-    filterRules->AppendColumn("Port Dst");
-    filterRules->AppendColumn("Protocol");
+    this->filterRules = new wxListView(page);
+    this->filterRules->AppendColumn("Policy");
+    this->filterRules->AppendColumn("MAC Src");
+    this->filterRules->AppendColumn("MAC Dst");
+    this->filterRules->AppendColumn("IP Src");
+    this->filterRules->AppendColumn("IP Dst");
+    this->filterRules->AppendColumn("Port Src");
+    this->filterRules->AppendColumn("Port Dst");
+    this->filterRules->AppendColumn("Protocol");
     // filterRules->SetColumnWidth(0, 250);
 
     auto filterClearOne = new wxButton(page, wxID_ANY, wxT("Zmazať zvolené"));
@@ -387,37 +394,37 @@ void DeviceWindow::filtersPage(wxPanel* page)
 
     auto filterNewRule = new wxFlexGridSizer(13, 2, 10, 10);
     filterNewRule->Add(ifaceLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterIface, 1, wxEXPAND);
+    filterNewRule->Add(this->aclNewRule.iface, 1, wxEXPAND);
     
     filterNewRule->Add(dirLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterDir, 1, wxEXPAND);
+    filterNewRule->Add(this->aclNewRule.dir, 1, wxEXPAND);
 
     filterNewRule->Add(newRuleLabel, 1, wxALIGN_CENTER_VERTICAL);
     filterNewRule->AddSpacer(1);
     
     filterNewRule->Add(policyLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterPolicy, 1, wxEXPAND);
+    filterNewRule->Add(this->aclNewRule.policy, 1, wxEXPAND);
 
     filterNewRule->Add(macSrcLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterMacSrc, 1, wxEXPAND);
+    filterNewRule->Add(this->aclNewRule.srcMac, 1, wxEXPAND);
 
     filterNewRule->Add(macDstLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterMacDst, 1, wxEXPAND);
+    filterNewRule->Add(this->aclNewRule.dstMac, 1, wxEXPAND);
     
     filterNewRule->Add(ipSrcLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterIpSrc, 1, wxEXPAND);
+    filterNewRule->Add(this->aclNewRule.srcIp, 1, wxEXPAND);
     
     filterNewRule->Add(ipDstLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterIpDst, 1, wxEXPAND);
+    filterNewRule->Add(this->aclNewRule.dstIp, 1, wxEXPAND);
     
     filterNewRule->Add(portSrcLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterPortSrc, 1, wxEXPAND);
+    filterNewRule->Add(this->aclNewRule.srcPort, 1, wxEXPAND);
     
     filterNewRule->Add(portDstLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(filterPortDst, 1, wxEXPAND);
+    filterNewRule->Add(this->aclNewRule.dstPort, 1, wxEXPAND);
 
     filterNewRule->Add(protoLabel, 1, wxALIGN_CENTER_VERTICAL);
-    filterNewRule->Add(proto, 1, wxEXPAND);
+    filterNewRule->Add(this->aclNewRule.proto, 1, wxEXPAND);
 
     filterNewRule->AddSpacer(1);
     filterNewRule->Add(filterAddRule, 2, wxEXPAND);
@@ -429,9 +436,14 @@ void DeviceWindow::filtersPage(wxPanel* page)
 
     auto layout = new wxBoxSizer(wxVERTICAL);
     layout->Add(filterNewRule, 0, wxEXPAND | wxALL, 5);
-    layout->Add(filterRules, 1, wxEXPAND);
+    layout->Add(this->filterRules, 1, wxEXPAND);
     layout->Add(filterClear, 0, wxEXPAND);
     page->SetSizer(layout);
+
+
+    this->aclNewRule.iface->Bind(wxEVT_CHOICE, &DeviceWindow::filterChooseACL, this);
+    this->aclNewRule.dir->Bind(wxEVT_CHOICE, &DeviceWindow::filterChooseACL, this);
+    this->aclNewRule.proto->Bind(wxEVT_CHOICE, &DeviceWindow::filterChooseProtocol, this);
 
     filterAddRule->Bind(wxEVT_BUTTON, &DeviceWindow::addTrafficFilter, this);
     filterClearOne->Bind(wxEVT_BUTTON, &DeviceWindow::deleteTrafficFilter, this);
@@ -550,14 +562,195 @@ void DeviceWindow::resetTrafficStats(wxCommandEvent& event)
     this->refreshTrafficStats();
 }
 
+void DeviceWindow::appendRuleACL(ACLRule& rule)
+{
+    auto i = this->filterRules->GetItemCount();
+    bool portOn = (rule.protocol == ACLProtocol::ACL_TCP || rule.protocol == ACLProtocol::ACL_UDP);
+
+    this->filterRules->InsertItem(i, (rule.allow) ? "allow": "deny");
+    this->filterRules->SetItem(i, 1, (rule.any.srcMAC) ? "any": rule.srcMAC);
+    this->filterRules->SetItem(i, 2, (rule.any.dstMAC) ? "any": rule.dstMAC);
+    this->filterRules->SetItem(i, 3, (rule.any.srcIP) ? "any": rule.srcIP);
+    this->filterRules->SetItem(i, 4, (rule.any.dstIP) ? "any": rule.dstIP);
+    this->filterRules->SetItem(i, 5, 
+        (portOn) ? ((rule.any.srcPort) ? "any": wxString::Format(wxT("%u"), rule.srcPort)): "-"
+    );
+    this->filterRules->SetItem(i, 6, 
+        (portOn) ? ((rule.any.dstPort) ? "any": wxString::Format(wxT("%u"), rule.dstPort)): "-"
+    );
+    this->filterRules->SetItem(i, 7, this->protoTypesAcl[rule.protocol]);
+}
+
+void DeviceWindow::filterChooseACL()
+{
+    auto interface = this->aclNewRule.iface->GetSelection();
+    auto direction = this->aclNewRule.dir->GetString(
+        this->aclNewRule.dir->GetSelection()
+    );
+
+    if (direction == "IN") {
+        for (auto& rule: this->netSwitch.inAcl[interface]) {
+            this->appendRuleACL(rule);
+        }
+    } else if (direction == "OUT") {
+        for (auto& rule: this->netSwitch.outAcl[interface]) {
+            this->appendRuleACL(rule);
+        }
+    }
+}
+
+void DeviceWindow::filterChooseACL(wxCommandEvent& event)
+{
+    this->filterChooseACL();
+}
+
+void DeviceWindow::filterChooseProtocol()
+{
+    auto proto = static_cast<ACLProtocol>(this->aclNewRule.proto->GetSelection());
+    bool on = false;
+    if (proto == ACLProtocol::ACL_TCP || proto == ACLProtocol::ACL_UDP)
+        on = true;
+
+    this->aclNewRule.srcPort->Enable(on);
+    this->aclNewRule.dstPort->Enable(on);
+}
+
+void DeviceWindow::filterChooseProtocol(wxCommandEvent& event)
+{
+    this->filterChooseProtocol();
+}
+
 void DeviceWindow::addTrafficFilter(wxCommandEvent& event)
 {
+    ACLRule rule;
 
+    auto aclPolicy = this->aclNewRule.policy->GetString(
+        this->aclNewRule.policy->GetSelection()
+    );
+    auto srcMacStr = this->aclNewRule.srcMac->GetValue().ToStdString();
+    auto dstMacStr = this->aclNewRule.dstMac->GetValue().ToStdString();
+    auto srcIpStr = this->aclNewRule.srcIp->GetValue().ToStdString();
+    auto dstIpStr = this->aclNewRule.dstIp->GetValue().ToStdString();
+    auto srcPortStr = this->aclNewRule.srcPort->GetValue();
+    auto dstPortStr = this->aclNewRule.dstPort->GetValue();
+
+    rule.allow = !(aclPolicy == "DENY");
+    rule.protocol = static_cast<ACLProtocol>(this->aclNewRule.proto->GetSelection());
+
+    pcpp::MacAddress srcMac(srcMacStr);
+    if (srcMacStr == "") {
+        rule.any.srcMAC = true;
+    } else if (srcMac.isValid()) {
+        rule.any.srcMAC = false;
+        rule.srcMAC = srcMac.toString();
+    } else {
+        auto dialog = new wxMessageDialog(
+            NULL, wxString::Format(wxT("Zdrojová MAC adresa '%s' je neplatná!"), srcMacStr),
+            wxT("Chyba pravidla"), wxOK | wxICON_ERROR
+        );
+        dialog->ShowModal();
+        return;
+    }
+
+    pcpp::MacAddress dstMac(dstMacStr);
+    if (dstMacStr == "") {
+        rule.any.dstMAC = true;
+    } else if (dstMac.isValid()) {
+        rule.any.dstMAC = false;
+        rule.dstMAC = dstMac.toString();
+    } else {
+        auto dialog = new wxMessageDialog(
+            NULL, wxString::Format(wxT("Cieľová MAC adresa '%s' je neplatná!"), dstMacStr),
+            wxT("Chyba pravidla"), wxOK | wxICON_ERROR
+        );
+        dialog->ShowModal();
+        return;
+    }
+
+    pcpp::IPv4Address srcIp(srcIpStr);
+    if (srcIpStr == "") {
+        rule.any.srcIP = true;
+    } else if (srcIp.isValid()) {
+        rule.any.srcIP = false;
+        rule.srcIP = srcIp.toString();
+    } else {
+        auto dialog = new wxMessageDialog(
+            NULL, wxString::Format(wxT("Zdrojová IP adresa '%s' je neplatná!"), srcIpStr),
+            wxT("Chyba pravidla"), wxOK | wxICON_ERROR
+        );
+        dialog->ShowModal();
+        return;
+    }
+
+    pcpp::IPv4Address dstIp(dstIpStr);
+    if (dstIpStr == "") {
+        rule.any.dstIP = true;
+    } else if (dstIp.isValid()) {
+        rule.any.dstIP = false;
+        rule.dstIP = dstIp.toString();
+    } else {
+        auto dialog = new wxMessageDialog(
+            NULL, wxString::Format(wxT("Cieľová IP adresa '%s' je neplatná!"), dstIpStr),
+            wxT("Chyba pravidla"), wxOK | wxICON_ERROR
+        );
+        dialog->ShowModal();
+        return;
+    }
+
+    long srcPort;
+    bool validPort = srcPortStr.ToLong(&srcPort);
+    if (srcPortStr == "") {
+        rule.any.srcPort = true;
+    } else if (validPort && (srcPort >= 0 && srcPort <= 65535)) {
+        rule.any.srcPort = false;
+        rule.srcPort = srcPort;
+    } else {
+        auto dialog = new wxMessageDialog(
+            NULL, wxString::Format(wxT("Zdrojový port '%s' je neplatný!"), srcPortStr),
+            wxT("Chyba pravidla"), wxOK | wxICON_ERROR
+        );
+        dialog->ShowModal();
+        return;
+    }
+
+    long dstPort;
+    validPort = dstPortStr.ToLong(&dstPort);
+    if (dstPortStr == "") {
+        rule.any.dstPort = true;
+    } else if (validPort && (dstPort >= 0 && dstPort <= 65535)) {
+        rule.any.dstPort = false;
+        rule.dstPort = dstPort;
+    } else {
+        auto dialog = new wxMessageDialog(
+            NULL, wxString::Format(wxT("Cieľový port '%s' je neplatný!"), srcPortStr),
+            wxT("Chyba pravidla"), wxOK | wxICON_ERROR
+        );
+        dialog->ShowModal();
+        return;
+    }
+
+    auto interface = this->aclNewRule.iface->GetSelection();
+    auto direction = this->aclNewRule.dir->GetString(
+        this->aclNewRule.dir->GetSelection()
+    );
+
+    if (direction == "IN") {
+        this->netSwitch.inAcl[interface].push_back(rule);
+    } else if (direction == "OUT") {
+        this->netSwitch.outAcl[interface].push_back(rule);
+    }
+    this->appendRuleACL(rule);
+
+    // clean form
 }
 
 void DeviceWindow::deleteAllTrafficFilters(wxCommandEvent& event)
 {
+    // Zisti, ktorý je acl je zvolený
 
+    // vymaž zoznam vo swichi
+
+    // preskresli pravidlá
 }
 
 void DeviceWindow::deleteTrafficFilter(wxCommandEvent& event)

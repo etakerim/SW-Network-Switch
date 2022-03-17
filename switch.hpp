@@ -57,6 +57,43 @@ struct Interface {
     unsigned short age;
 };
 
+enum ACLProtocol {
+    ACL_NONE = 0, ACL_TCP, ACL_UDP, ACL_ICMP_REQUEST, ACL_ICMP_REPLY
+};
+
+// Ako bude ANY? (bit struct)
+struct ACLRule {
+    bool allow;
+    struct {
+        bool srcMAC;
+        bool dstMAC;
+        bool srcIP;
+        bool dstIP;
+        bool srcPort;
+        bool dstPort;
+    } any;  
+    std::string srcMAC;
+    std::string dstMAC;
+    std::string srcIP;
+    std::string dstIP;
+    uint16_t srcPort;
+    uint16_t dstPort;
+    ACLProtocol protocol;
+};
+
+struct FilterForm {
+    wxChoice* iface;
+    wxChoice* dir;
+    wxChoice* policy;
+    wxTextCtrl* srcMac;
+    wxTextCtrl* dstMac;
+    wxTextCtrl* srcIp;
+    wxTextCtrl* dstIp;
+    wxTextCtrl* srcPort;
+    wxTextCtrl* dstPort;
+    wxChoice* proto;
+};
+
 class NetworkSwitch
 {
 public:
@@ -71,22 +108,28 @@ public:
     std::unordered_map<std::string, CAMRecord> getMACTable();
     std::vector<std::string> getInterfaceNames() { return ifnames; }
 
+    std::array<std::vector<ACLRule>, SWITCH_PORTS> inAcl;
+    std::array<std::vector<ACLRule>, SWITCH_PORTS> outAcl;
+
     TrafficStats inboundStats;
     TrafficStats outboundStats;
     const std::vector<std::string> ifnames{"port1", "port2"};
     unsigned int macTimeout = 60;
 
 private:
+    bool checkACL(std::vector<ACLRule>& rules);
     void aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet, size_t port);
     bool isPacketLooping(pcpp::RawPacket* packet);
 
     std::mutex macTableMutex;
-    std::unordered_map<std::string, CAMRecord> macTable;
     std::array<Interface, SWITCH_PORTS> ports;
+    std::unordered_map<std::string, CAMRecord> macTable;
 
     // Opravy pre cyklenie rámcov a sledovanie odpojenia linky
     std::set<std::vector<uint8_t>> duplicates;
-    const std::set<std::string> macAliveTraffic {"c2:04:b2:ed:00:00", "c2:05:b3:0e:00:00"};
+    const std::set<std::string> macAliveTraffic {
+        "c2:04:b2:ed:00:00", "c2:05:b3:0e:00:00"
+    };
 };
 
 
@@ -119,6 +162,13 @@ private:
     void deleteTrafficFilter(wxCommandEvent& event);
     void deleteAllTrafficFilters(wxCommandEvent& event);
 
+    void filterChooseACL();
+    void filterChooseACL(wxCommandEvent& event);
+    void appendRuleACL(ACLRule& rule);
+
+    void filterChooseProtocol();
+    void filterChooseProtocol(wxCommandEvent& event);
+
     void manageSyslogService(wxCommandEvent& event);
     void clearSyslogConsole(wxCommandEvent& event);
 
@@ -127,9 +177,20 @@ private:
     NetworkSwitch netSwitch;
     wxChoice* portStats;
     wxListView* stats;
+
     wxListView* cam;
     wxSpinCtrl* timerLimit;
     wxStaticText* recordTimeout;
+
+    FilterForm aclNewRule;
+    wxListView *filterRules;
+
+    // Konštanty pre filtre
+    const wxString directionsAcl[2] = {"IN", "OUT"};
+    const wxString policiesAcl[2] = {"ALLOW", "DENY"};
+    const wxString protoTypesAcl[5] = {
+        "-", "TCP", "UDP", "ICMP Echo Reply (0)", "ICMP Echo Request (8)"
+    };
 };
 
 #endif
