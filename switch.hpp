@@ -58,12 +58,13 @@ struct Interface {
     unsigned short age;
 };
 
+// Musí byť totožné s zoznamami reťazcov v DeviceWindow
 enum ACLProtocol {
     ACL_NONE = 0,
     ACL_TCP,
     ACL_UDP,
+    ACL_ICMP_REPLY,
     ACL_ICMP_REQUEST,
-    ACL_ICMP_REPLY
 };
 
 enum ACLDirection {
@@ -152,7 +153,7 @@ private:
 
     // Opravy pre cyklenie rámcov a sledovanie odpojenia linky
     std::set<std::vector<uint8_t>> duplicates;
-    const std::set<std::string> macAliveTraffic {
+    const std::set<std::string> macAliveTraffic{
         "c2:04:b2:ed:00:00", "c2:05:b3:0e:00:00"
     };
 };

@@ -19,7 +19,7 @@ void NetworkSwitch::startup()
     for (size_t i = 0; i < this->ports.size(); ++i) {
         this->ports[i].dev->startCapture(NetworkSwitch::dispatch, this);
         this->ports[i].age = 0;
-        this->ports[i].up = true;
+        this->ports[i].up = false;
     }
 }
 
@@ -39,7 +39,8 @@ void NetworkSwitch::timer()
 
     for (auto record = this->macTable.begin(); record != this->macTable.end();) {
         record->second.age++;
-        if (this->ports[record->second.port].age > PORT_ALIVE_SEC) {
+
+        if (this->ports[record->second.port].age >= PORT_ALIVE_SEC) {
             this->ports[record->second.port].up = false;
             record = this->macTable.erase(record);
         } else if (record->second.age > this->macTimeout) {
@@ -68,19 +69,20 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
         return;
 
     pcpp::EthLayer* ethLayer = packet->getLayerOfType<pcpp::EthLayer>();
-    std::string srcMac = ethLayer->getSourceMac().toString();
-    std::string dstMac = ethLayer->getDestMac().toString();
-    const bool ignore = this->macAliveTraffic.find(dstMac) != this->macAliveTraffic.end();
+    const std::string srcMac = ethLayer->getSourceMac().toString();
+    const std::string dstMac = ethLayer->getDestMac().toString();
+    const bool ignore = (
+        this->macAliveTraffic.count(srcMac) || this->macAliveTraffic.count(dstMac)
+    );
 
-    auto cam = this->getMACTable();
-    auto record = cam.find(dstMac);
-    bool unicast = record != cam.end();
+    const auto cam = this->getMACTable();
+    const auto record = cam.find(dstMac);
+    const bool unicast = cam.count(dstMac);
 
     ACLRule frameACL;
     frameACLPreprocess(frameACL, packet);
 
     for (size_t i = 0; i < this->ports.size(); ++i) {
-
         if (srcPort == this->ports[i].dev) {
             // FRAME INBOUND
             this->macTableMutex.lock();
@@ -99,10 +101,6 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
         } else {
             // FRAME OUTBOUND
             if (ignore) {
-                this->macTableMutex.lock();
-                this->ports[i].age = 0;
-                this->ports[i].up = true;
-                this->macTableMutex.unlock();
                 this->ports[i].dev->sendPacket(packet);
                 continue;
             }
@@ -319,20 +317,21 @@ bool NetworkSwitch::checkACL(ACLRule& frame, std::vector<ACLRule>& rules)
     this->aclMutex.lock();
     for (auto& rule: rules) {
 
-        if (!rule.any.srcMAC && !frame.any.srcMAC && rule.srcMAC != frame.srcMAC)
+        if (!(rule.any.srcMAC || (!rule.any.srcMAC && !frame.any.srcMAC && rule.srcMAC == frame.srcMAC)))
             continue;
-        if (!rule.any.dstMAC && !frame.any.dstMAC && rule.dstMAC != frame.dstMAC)
+        if (!(rule.any.dstMAC || (!rule.any.dstMAC && !frame.any.dstMAC && rule.dstMAC == frame.dstMAC)))
             continue;
-        if (!rule.any.srcIP && !frame.any.srcIP && rule.srcIP != frame.srcIP)
+        if (!(rule.any.srcIP || (!rule.any.srcIP && !frame.any.srcIP && rule.srcIP == frame.srcIP)))
             continue;
-        if (!rule.any.dstIP && !frame.any.dstIP && rule.dstIP != frame.dstIP)
+        if (!(rule.any.dstIP || (!rule.any.dstIP && !frame.any.dstIP && rule.dstIP == frame.dstIP)))
             continue;
         if (rule.protocol != frame.protocol)
             continue;
         if (rule.protocol == ACLProtocol::ACL_TCP || rule.protocol == ACLProtocol::ACL_UDP) {
-            if (!rule.any.srcPort && !frame.any.srcPort && rule.srcPort != frame.srcPort)
+
+            if (!(rule.any.srcPort || (!rule.any.srcPort && !frame.any.srcPort && rule.srcPort == frame.srcPort)))
                 continue;
-            if (!rule.any.dstPort && !frame.any.dstPort && rule.dstPort != frame.dstPort)
+            if (!(rule.any.dstPort || (!rule.any.dstPort && !frame.any.dstPort && rule.dstPort == frame.dstPort)))
                 continue;
         }
 

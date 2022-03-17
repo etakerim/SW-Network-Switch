@@ -202,6 +202,10 @@ void DeviceWindow::filtersPage(wxPanel* page)
     this->filterRules->AppendColumn("Port Dst");
     this->filterRules->AppendColumn("Protocol");
     
+    this->aclNewRule.proto->SetSelection(0);
+    this->aclNewRule.iface->SetSelection(0);
+    this->aclNewRule.dir->SetSelection(0);
+    this->aclNewRule.policy->SetSelection(0);
     this->clearACLForm();
     // filterRules->SetColumnWidth(0, 250);
 
@@ -428,11 +432,6 @@ void DeviceWindow::filterChooseProtocol(wxCommandEvent& event)
 
 void DeviceWindow::clearACLForm()
 {
-    this->aclNewRule.proto->SetSelection(0);
-    this->aclNewRule.iface->SetSelection(0);
-    this->aclNewRule.dir->SetSelection(0);
-    this->aclNewRule.policy->SetSelection(0);
-
     this->aclNewRule.srcMac->Clear();
     this->aclNewRule.dstMac->Clear();
     this->aclNewRule.srcIp->Clear();
