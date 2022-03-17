@@ -36,7 +36,6 @@ public:
     virtual bool OnInit();
 };
 
-wxIMPLEMENT_APP(App);
 
 #define SWITCH_PORTS    2
 enum PDU {EthII = 0, IP, ARP, TCP, UDP, ICMP, HTTP, count};
@@ -58,10 +57,18 @@ struct Interface {
 };
 
 enum ACLProtocol {
-    ACL_NONE = 0, ACL_TCP, ACL_UDP, ACL_ICMP_REQUEST, ACL_ICMP_REPLY
+    ACL_NONE = 0,
+    ACL_TCP,
+    ACL_UDP,
+    ACL_ICMP_REQUEST,
+    ACL_ICMP_REPLY
 };
 
-// Ako bude ANY? (bit struct)
+enum ACLDirection {
+    ACL_DIR_IN = 0,
+    ACL_DIR_OUT 
+};
+
 struct ACLRule {
     bool allow;
     struct {
@@ -102,28 +109,43 @@ public:
     void timer();
     void route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort);
     static void dispatch(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* port, void* context);
-    void clearStats();
-    void clearMACTable();
-
-    std::unordered_map<std::string, CAMRecord> getMACTable();
     std::vector<std::string> getInterfaceNames() { return ifnames; }
 
-    std::array<std::vector<ACLRule>, SWITCH_PORTS> inAcl;
-    std::array<std::vector<ACLRule>, SWITCH_PORTS> outAcl;
+    int getMACTimeout();
+    void setMACTimeout(size_t timeout);
 
-    TrafficStats inboundStats;
-    TrafficStats outboundStats;
+    void clearMACTable();
+    void addMACRecord(std::string mac, CAMRecord& peer);
+    std::unordered_map<std::string, CAMRecord> getMACTable();
+
+    void getStats(size_t port, size_t proto, size_t& inbound, size_t& outbound);
+    void clearStats();
+
+    void addACLRule(size_t interface, ACLDirection direction, ACLRule &rule);
+    void clearACLRules(size_t interface, ACLDirection direction);
+    void removeACLRule(size_t interface, ACLDirection direction, size_t idx);
+    std::vector<ACLRule> getACLRules(size_t interface, ACLDirection direction);
+
     const std::vector<std::string> ifnames{"port1", "port2"};
-    unsigned int macTimeout = 60;
 
 private:
-    bool checkACL(std::vector<ACLRule>& rules);
+    bool checkACL(pcpp::Packet* packet, std::vector<ACLRule>& rules);
     void aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet, size_t port);
     bool isPacketLooping(pcpp::RawPacket* packet);
 
     std::mutex macTableMutex;
+    std::mutex statsMutex;
+    std::mutex aclMutex;
+
     std::array<Interface, SWITCH_PORTS> ports;
     std::unordered_map<std::string, CAMRecord> macTable;
+    size_t macTimeout = 60;
+
+    TrafficStats inboundStats;
+    TrafficStats outboundStats;
+
+    std::array<std::vector<ACLRule>, SWITCH_PORTS> inAcl;
+    std::array<std::vector<ACLRule>, SWITCH_PORTS> outAcl;
 
     // Opravy pre cyklenie rámcov a sledovanie odpojenia linky
     std::set<std::vector<uint8_t>> duplicates;
@@ -141,34 +163,38 @@ public:
     void onClose(wxCloseEvent& event);
 
 private:
+    // ----------------- GUI Layout ---------------------
     void camTablePage(wxPanel* page);
     void statisticsPage(wxPanel* page);
     void filtersPage(wxPanel* page);
     void syslogPage(wxPanel* page);
 
-    void refreshTrafficStats();
+    // ----------------- MAC Table tab ---------------------
     void refreshCAMTable();
+    void clearMACTable(wxCommandEvent& event);
+    void setMACTimeout(wxCommandEvent& event);
     void setTimeoutLabel();
 
-    void clearMACTable(wxCommandEvent& event);
-    void setMACTimeout(wxCommandEvent& event); 
-
-    void timerTick(wxTimerEvent& event);
+    // ----------------- Traffic stats tab ---------------------
+    void updateTrafficStats();
     void updateTrafficStats(wxCommandEvent& event);
     void resetTrafficStats(wxCommandEvent& event);
-    void resetTimeout(wxFocusEvent& event);
-    
-    void addTrafficFilter(wxCommandEvent& event);
-    void deleteTrafficFilter(wxCommandEvent& event);
-    void deleteAllTrafficFilters(wxCommandEvent& event);
 
+    // ----------------- ACL rules tab ---------------------
+    void appendRuleACL(ACLRule& rule);
     void filterChooseACL();
     void filterChooseACL(wxCommandEvent& event);
-    void appendRuleACL(ACLRule& rule);
-
     void filterChooseProtocol();
     void filterChooseProtocol(wxCommandEvent& event);
+    void clearACLForm();
+    void addTrafficFilter(wxCommandEvent& event);
+    void deleteAllTrafficFilters(wxCommandEvent& event);
+    void deleteTrafficFilter(wxCommandEvent& event);
 
+    // ----------------- Timer tick tab ---------------------
+    void timerTick(wxTimerEvent& event);
+
+    // ----------------- Syslog tab ---------------------
     void manageSyslogService(wxCommandEvent& event);
     void clearSyslogConsole(wxCommandEvent& event);
 
