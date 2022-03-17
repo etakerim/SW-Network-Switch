@@ -5,7 +5,7 @@
 # https://wiki.wxwidgets.org/Compiling_and_getting_started
 # install: pacman -Ss wx-widgets
 
-FILES="switch.cpp"
+FILES="switch.cpp gui.cpp"
 EXEC="switch"
 g++ -std=c++11 -O2 -g -Wall $FILES `wx-config --cxxflags --libs` \
     -lPcap++ -lPacket++ -lCommon++ -lpcap -lpthread \

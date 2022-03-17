@@ -25,6 +25,8 @@
 #include "TcpLayer.h"
 #include "HttpLayer.h"
 #include "PcapFileDevice.h"
+#include "UdpLayer.h"
+#include "IcmpLayer.h"
 
 #include "PcapLiveDeviceList.h"
 #include "SystemUtils.h"
@@ -129,7 +131,8 @@ public:
     const std::vector<std::string> ifnames{"port1", "port2"};
 
 private:
-    bool checkACL(pcpp::Packet* packet, std::vector<ACLRule>& rules);
+    void frameACLPreprocess(ACLRule& frame, pcpp::Packet* packet);
+    bool checkACL(ACLRule& frame, std::vector<ACLRule>& rules);
     void aggregateStats(TrafficStats& statsDir, pcpp::Packet* packet, size_t port);
     bool isPacketLooping(pcpp::RawPacket* packet);
 

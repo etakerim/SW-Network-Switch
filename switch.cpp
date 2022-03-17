@@ -64,10 +64,10 @@ void NetworkSwitch::dispatch(pcpp::RawPacket* packet, pcpp::PcapLiveDevice* dev,
 
 void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
 {
-    pcpp::EthLayer* ethLayer = packet->getLayerOfType<pcpp::EthLayer>();
-    if (ethLayer == NULL)
+    if (!packet->isPacketOfType(pcpp::Ethernet))
         return;
 
+    pcpp::EthLayer* ethLayer = packet->getLayerOfType<pcpp::EthLayer>();
     std::string srcMac = ethLayer->getSourceMac().toString();
     std::string dstMac = ethLayer->getDestMac().toString();
     const bool ignore = this->macAliveTraffic.find(dstMac) != this->macAliveTraffic.end();
@@ -75,6 +75,9 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
     auto cam = this->getMACTable();
     auto record = cam.find(dstMac);
     bool unicast = record != cam.end();
+
+    ACLRule frameACL;
+    frameACLPreprocess(frameACL, packet);
 
     for (size_t i = 0; i < this->ports.size(); ++i) {
 
@@ -87,7 +90,7 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
             if (ignore)
                 continue;
 
-            if (this->checkACL(packet, this->inAcl[i])) {
+            if (this->checkACL(frameACL, this->inAcl[i])) {
                 this->aggregateStats(this->inboundStats, packet, i);
                 CAMRecord peer = {.port = i, .age = 0};
                 this->addMACRecord(srcMac, peer);
@@ -111,7 +114,7 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
                 continue;
             }
 
-            if (this->checkACL(packet, this->outAcl[i])) {
+            if (this->checkACL(frameACL, this->outAcl[i])) {
                 this->aggregateStats(this->outboundStats, packet, i);
                 this->ports[i].dev->sendPacket(packet);
             }
@@ -251,17 +254,90 @@ std::vector<ACLRule> NetworkSwitch::getACLRules(size_t interface, ACLDirection d
     if (direction == ACLDirection::ACL_DIR_IN) {
         rules = this->inAcl[interface];
     } else if (direction == ACLDirection::ACL_DIR_OUT) {
-        rules =  this->outAcl[interface];
+        rules = this->outAcl[interface];
     }
     this->aclMutex.unlock();
     return rules;
 }
 
-bool NetworkSwitch::checkACL(pcpp::Packet* packet, std::vector<ACLRule>& rules)
+void NetworkSwitch::frameACLPreprocess(ACLRule& frame, pcpp::Packet* packet)
+{
+    frame.any.srcMAC = true;
+    frame.any.dstMAC = true;
+    frame.any.srcIP = true;
+    frame.any.dstIP = true;
+    frame.any.srcPort = true;
+    frame.any.dstPort = true;
+    frame.protocol = ACLProtocol::ACL_NONE;
+
+    if (packet->isPacketOfType(pcpp::Ethernet)) {
+        auto eth = packet->getLayerOfType<pcpp::EthLayer>();
+        frame.srcMAC = eth->getSourceMac().toString();
+        frame.dstMAC = eth->getDestMac().toString();
+        frame.any.srcMAC = false;
+        frame.any.dstMAC = false;
+    }
+
+    if (packet->isPacketOfType(pcpp::IPv4)) {
+        auto eth = packet->getLayerOfType<pcpp::IPv4Layer>();
+        frame.srcIP = eth->getSrcIPv4Address().toString();
+        frame.dstIP = eth->getDstIPv4Address().toString();
+        frame.any.srcIP = false;
+        frame.any.dstIP = false;
+    }
+
+    if (packet->isPacketOfType(pcpp::TCP)) {
+        auto eth = packet->getLayerOfType<pcpp::TcpLayer>();
+        frame.srcPort = eth->getSrcPort();
+        frame.dstPort = eth->getDstPort();
+        frame.any.srcPort = false;
+        frame.any.dstPort = false;
+        frame.protocol = ACLProtocol::ACL_TCP;
+    }
+
+    if (packet->isPacketOfType(pcpp::UDP)) {
+        auto eth = packet->getLayerOfType<pcpp::UdpLayer>();
+        frame.srcPort = eth->getSrcPort();
+        frame.dstPort = eth->getDstPort();
+        frame.any.srcPort = false;
+        frame.any.dstPort = false;
+        frame.protocol = ACLProtocol::ACL_UDP;
+    }
+
+    if (packet->isPacketOfType(pcpp::ICMP)) {
+        auto eth = packet->getLayerOfType<pcpp::IcmpLayer>();
+        auto msg = eth->getMessageType();
+        if (msg == pcpp::IcmpMessageType::ICMP_ECHO_REPLY)
+            frame.protocol = ACLProtocol::ACL_ICMP_REPLY;
+        else if (msg == pcpp::IcmpMessageType::ICMP_ECHO_REQUEST)
+            frame.protocol = ACLProtocol::ACL_ICMP_REQUEST;
+    }
+}
+
+bool NetworkSwitch::checkACL(ACLRule& frame, std::vector<ACLRule>& rules)
 {
     this->aclMutex.lock();
     for (auto& rule: rules) {
-        
+
+        if (!rule.any.srcMAC && !frame.any.srcMAC && rule.srcMAC != frame.srcMAC)
+            continue;
+        if (!rule.any.dstMAC && !frame.any.dstMAC && rule.dstMAC != frame.dstMAC)
+            continue;
+        if (!rule.any.srcIP && !frame.any.srcIP && rule.srcIP != frame.srcIP)
+            continue;
+        if (!rule.any.dstIP && !frame.any.dstIP && rule.dstIP != frame.dstIP)
+            continue;
+        if (rule.protocol != frame.protocol)
+            continue;
+        if (rule.protocol == ACLProtocol::ACL_TCP || rule.protocol == ACLProtocol::ACL_UDP) {
+            if (!rule.any.srcPort && !frame.any.srcPort && rule.srcPort != frame.srcPort)
+                continue;
+            if (!rule.any.dstPort && !frame.any.dstPort && rule.dstPort != frame.dstPort)
+                continue;
+        }
+
+        this->aclMutex.unlock();
+        return rule.allow;
     }
     this->aclMutex.unlock();
     return true;
