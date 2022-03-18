@@ -53,8 +53,7 @@ void NetworkSwitch::timer()
 
         if (this->ports[record->second.port].age >= PORT_ALIVE_SEC) {
             this->ports[record->second.port].up = false;
-            record = this->macTable.erase(record);
-            
+             record = this->macTable.erase(record);
         } else if (record->second.age > this->macTimeout) {
             record = this->macTable.erase(record);
         } else {
@@ -62,6 +61,13 @@ void NetworkSwitch::timer()
         }
     }
     this->macTableMutex.unlock();
+
+    /*
+    std::ostringstream s;
+            s << "Timeout of record with MAC address [" << record->first;
+            s << "] on port " << this->ifnames[record->second.port];
+            this->syslogSend(SyslogSeverity::INFORMATIONAL, s.str());
+    */
 }
 
 
@@ -151,6 +157,7 @@ void NetworkSwitch::clearMACTable()
     this->macTableMutex.lock();
     this->macTable.clear();
     this->macTableMutex.unlock();
+
     this->syslogSend(SyslogSeverity::NOTICE, "Reset of CAM table");
 }
 
@@ -163,7 +170,7 @@ void NetworkSwitch::addMACRecord(std::string mac, CAMRecord& peer)
 
     if (!exists) {
         std::ostringstream s;
-        s << "Device with MAC address [" << mac<< "] available on port " << this->ifnames[peer.port];
+        s << "Device with MAC address [" << mac<< "] available on " << this->ifnames[peer.port];
         this->syslogSend(SyslogSeverity::INFORMATIONAL, s.str());
     }
 }
@@ -214,6 +221,10 @@ void NetworkSwitch::setMACTimeout(size_t timeout)
     this->macTableMutex.lock();
     this->macTimeout = timeout;
     this->macTableMutex.unlock();
+
+    std::ostringstream s;
+    s << "Change of timeout for CAM records to " << timeout << " seconds";
+    this->syslogSend(SyslogSeverity::NOTICE, s.str());
 }
 
 int NetworkSwitch::getMACTimeout()
@@ -241,6 +252,11 @@ void NetworkSwitch::addACLRule(size_t interface, ACLDirection direction, ACLRule
         this->outAcl[interface].push_back(rule);
     }
     this->aclMutex.unlock();
+
+    std::ostringstream s;
+    s << "New ACL rule on '" << this->ifnames[interface] << "' in direction  ";
+    s << ((direction == ACLDirection::ACL_DIR_IN) ? "IN" : "OUT");
+    this->syslogSend(SyslogSeverity::WARNING, s.str());
 }
 
 void NetworkSwitch::clearACLRules(size_t interface, ACLDirection direction)
@@ -252,6 +268,11 @@ void NetworkSwitch::clearACLRules(size_t interface, ACLDirection direction)
         this->outAcl[interface].clear();
     }
     this->aclMutex.unlock();
+
+    std::ostringstream s;
+    s << "Delete all ACL rules on '" << this->ifnames[interface] << "' in direction  ";
+    s << ((direction == ACLDirection::ACL_DIR_IN) ? "IN" : "OUT");
+    this->syslogSend(SyslogSeverity::WARNING, s.str());
 }
 
 void NetworkSwitch::removeACLRule(size_t interface, ACLDirection direction, size_t idx)

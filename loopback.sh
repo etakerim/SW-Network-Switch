@@ -3,10 +3,10 @@ ip link add name loop1 type dummy
 ip link set loop1 up
 
 sudo su
-ip link add name P0 type dummy
-ip link set P0 up
-ip link add name P1 type dummy
-ip link set P1 up
+ip link add name port1 type dummy
+ip link set port1 up
+ip link add name port2 type dummy
+ip link set port2 up
 
 #####CREATE###################################
 ip link add name P0 type dummy
