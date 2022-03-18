@@ -9,6 +9,9 @@
 #include <vector>
 #include <set>
 #include <mutex>
+#include <chrono>
+#include <sstream>
+#include <iomanip>
 
 #include <wx/stattext.h>
 #include <wx/button.h>
@@ -27,6 +30,9 @@
 #include "PcapFileDevice.h"
 #include "UdpLayer.h"
 #include "IcmpLayer.h"
+#include "MacAddress.h"
+#include "IpAddress.h"
+#include "PayloadLayer.h"
 
 #include "PcapLiveDeviceList.h"
 #include "SystemUtils.h"
@@ -104,6 +110,26 @@ struct FilterForm {
     wxChoice* proto;
 };
 
+struct SyslogClient {
+    bool running;
+    size_t iface;
+    std::string srcMAC;
+    std::string dstMAC;
+    std::string srcIP;
+    std::string syslogIP;
+};
+
+enum SyslogSeverity {
+    EMERGENCY = 0,
+    ALERT,
+    CRITICAL,
+    ERROR,
+    WARNING,
+    NOTICE,
+    INFORMATIONAL,
+    DEBUG
+};
+
 class NetworkSwitch
 {
 public:
@@ -129,7 +155,10 @@ public:
     void removeACLRule(size_t interface, ACLDirection direction, size_t idx);
     std::vector<ACLRule> getACLRules(size_t interface, ACLDirection direction);
 
+    void syslogSend(SyslogSeverity severity, std::string message);
+
     const std::vector<std::string> ifnames{"port1", "port2"};
+    SyslogClient syslog;
 
 private:
     void frameACLPreprocess(ACLRule& frame, pcpp::Packet* packet);
@@ -151,7 +180,7 @@ private:
     std::array<std::vector<ACLRule>, SWITCH_PORTS> inAcl;
     std::array<std::vector<ACLRule>, SWITCH_PORTS> outAcl;
 
-    // Opravy pre cyklenie rámcov a sledovanie odpojenia linky
+    // Fixes for frame cycling and ignore for keepalive ping traffic
     std::set<std::vector<uint8_t>> duplicates;
     const std::set<std::string> macAliveTraffic{
         "c2:04:b2:ed:00:00", "c2:05:b3:0e:00:00"
@@ -213,7 +242,12 @@ private:
     wxStaticText* recordTimeout;
 
     FilterForm aclNewRule;
-    wxListView *filterRules;
+    wxListView* filterRules;
+
+    wxTextCtrl* sourceIP;
+    wxTextCtrl* syslogIP;
+    wxButton* syslogConnect;
+    wxTextCtrl* syslogMessages;
 
     // Konštanty pre filtre
     const wxString directionsAcl[2] = {"IN", "OUT"};

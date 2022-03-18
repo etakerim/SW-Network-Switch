@@ -273,26 +273,26 @@ void DeviceWindow::syslogPage(wxPanel* page)
 {
     auto sourceIPLabel = new wxStaticText(page, wxID_ANY, wxT("Zdrojová IP adresa:"));
     auto syslogIPLabel = new wxStaticText(page, wxID_ANY, wxT("Syslog IP adresa:"));
-    auto sourceIP = new wxTextCtrl(page, wxID_ANY);
-    auto syslogIP = new wxTextCtrl(page, wxID_ANY);
-    auto syslogConnect = new wxButton(page, wxID_ANY, wxT("Spustiť"));
+    this->sourceIP = new wxTextCtrl(page, wxID_ANY);
+    this->syslogIP = new wxTextCtrl(page, wxID_ANY);
+    this->syslogConnect = new wxButton(page, wxID_ANY, wxT("Spustiť"));
 
     auto syslogOutLabel = new wxStaticText(page, wxID_ANY, wxT("Odoslané správy:"));
     auto font = syslogOutLabel->GetFont();
     font.SetPointSize(12);
     syslogOutLabel->SetFont(font);
     auto syslogClear = new wxButton(page, wxID_ANY, wxT("Vymazať"));
-    auto syslogMessages = new wxTextCtrl(
+    this->syslogMessages = new wxTextCtrl(
         page, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
         wxTE_MULTILINE | wxTE_READONLY
     );
 
     auto connection = new wxFlexGridSizer(3, 2, 10, 10);
     connection->Add(sourceIPLabel, 1, wxALIGN_CENTER_VERTICAL);
-    connection->Add(sourceIP, 1, wxEXPAND);
+    connection->Add(this->sourceIP, 1, wxEXPAND);
     connection->Add(syslogIPLabel, 1, wxALIGN_CENTER_VERTICAL);
-    connection->Add(syslogIP,1, wxEXPAND);
-    connection->Add(syslogConnect);
+    connection->Add(this->syslogIP, 1, wxEXPAND);
+    connection->Add(this->syslogConnect);
     connection->AddGrowableCol(1, 0);
 
     auto syslogMsgHeading = new wxBoxSizer(wxHORIZONTAL);
@@ -305,7 +305,7 @@ void DeviceWindow::syslogPage(wxPanel* page)
     layout->Add(syslogMessages, 1, wxEXPAND | wxALL, 5);
     page->SetSizer(layout);
 
-    syslogConnect->Bind(wxEVT_BUTTON, &DeviceWindow::manageSyslogService, this);
+    this->syslogConnect->Bind(wxEVT_BUTTON, &DeviceWindow::manageSyslogService, this);
     syslogClear->Bind(wxEVT_BUTTON, &DeviceWindow::clearSyslogConsole, this);
 }
 
@@ -592,10 +592,44 @@ void DeviceWindow::timerTick(wxTimerEvent& event)
 // ----------------- Syslog tab ---------------------
 void DeviceWindow::manageSyslogService(wxCommandEvent& event)
 {
+    if (this->netSwitch.syslog.running) {
 
+        this->netSwitch.syslog.running = false;
+        this->syslogConnect->SetLabel(wxT("Spustiť"));
+        this->sourceIP->Enable(true);
+        this->syslogIP->Enable(true);
+
+    } else {
+        pcpp::IPv4Address origin(this->sourceIP->GetValue().ToStdString());
+        if (!origin.isValid()) {
+            auto dialog = new wxMessageDialog(
+                NULL, wxT("Zdrojová IP adresa je neplatná!"),
+                wxT("Neplatná IP adresa"), wxOK | wxICON_ERROR
+            );
+            dialog->ShowModal();
+            return;
+        }
+
+        pcpp::IPv4Address destination(this->syslogIP->GetValue().ToStdString());
+        if (!origin.isValid()) {
+            auto dialog = new wxMessageDialog(
+                NULL, wxT("Syslog IP adresa je neplatná!"),
+                wxT("Neplatná IP adresa"), wxOK | wxICON_ERROR
+            );
+            dialog->ShowModal();
+            return;
+        }
+
+        this->netSwitch.syslog.running = true;
+        this->netSwitch.syslog.srcIP = origin.toString();
+        this->netSwitch.syslog.syslogIP = destination.toString();
+        this->syslogConnect->SetLabel(wxT("Zastaviť"));
+        this->sourceIP->Enable(false);
+        this->syslogIP->Enable(false);
+    }
 }
 
 void DeviceWindow::clearSyslogConsole(wxCommandEvent& event)
 {
-
+    this->syslogMessages->Clear();
 }

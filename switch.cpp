@@ -2,6 +2,8 @@
 
 
 #define PORT_ALIVE_SEC      5
+#define SYSLOG_PORT         514
+#define FACILITY_LOCAL0     16
 
 
 void NetworkSwitch::startup()
@@ -16,11 +18,20 @@ void NetworkSwitch::startup()
             throw std::runtime_error("Cannot open interface");
     }
 
+    // all ports are listening for keepalive ping traffic and are down
     for (size_t i = 0; i < this->ports.size(); ++i) {
         this->ports[i].dev->startCapture(NetworkSwitch::dispatch, this);
         this->ports[i].age = 0;
         this->ports[i].up = false;
     }
+
+    // SYSLOG defaults
+    syslog.running = false;
+    syslog.iface = 0;
+    syslog.srcMAC = this->ports[syslog.iface].dev->getMacAddress().toString();
+    syslog.dstMAC = "18:56:80:08:94:e5";  // wlan0
+    syslog.srcIP = "";
+    syslog.syslogIP = "";
 }
 
 void NetworkSwitch::shutdown()
@@ -43,6 +54,7 @@ void NetworkSwitch::timer()
         if (this->ports[record->second.port].age >= PORT_ALIVE_SEC) {
             this->ports[record->second.port].up = false;
             record = this->macTable.erase(record);
+            
         } else if (record->second.age > this->macTimeout) {
             record = this->macTable.erase(record);
         } else {
@@ -139,13 +151,21 @@ void NetworkSwitch::clearMACTable()
     this->macTableMutex.lock();
     this->macTable.clear();
     this->macTableMutex.unlock();
+    this->syslogSend(SyslogSeverity::NOTICE, "Reset of CAM table");
 }
 
 void NetworkSwitch::addMACRecord(std::string mac, CAMRecord& peer)
 {
     this->macTableMutex.lock();
+    bool exists = this->macTable.count(mac);
     this->macTable[mac] = peer;
     this->macTableMutex.unlock();
+
+    if (!exists) {
+        std::ostringstream s;
+        s << "Device with MAC address [" << mac<< "] available on port " << this->ifnames[peer.port];
+        this->syslogSend(SyslogSeverity::INFORMATIONAL, s.str());
+    }
 }
 
 void NetworkSwitch::clearStats()
@@ -340,4 +360,47 @@ bool NetworkSwitch::checkACL(ACLRule& frame, std::vector<ACLRule>& rules)
     }
     this->aclMutex.unlock();
     return true;
+}
+
+void NetworkSwitch::syslogSend(SyslogSeverity severity, std::string message)
+{
+    if (!this->syslog.running)
+        return;
+
+    auto priority = FACILITY_LOCAL0 * 8 + severity;
+    
+    auto now = std::chrono::system_clock::now();
+    auto tm = std::chrono::system_clock::to_time_t(now);
+
+    std::ostringstream logger;
+    logger << "<" << priority << ">1 ";
+    logger << std::put_time(localtime(&tm), "%FT%TZ") << " ";
+    logger <<  this->syslog.srcIP << "     " << "switch" << " ";
+    logger << message;
+
+    pcpp::EthLayer eth(
+        pcpp::MacAddress(this->syslog.srcMAC),
+        pcpp::MacAddress(this->syslog.dstMAC)
+    );
+    pcpp::IPv4Layer ip(
+        pcpp::IPv4Address(this->syslog.srcIP),
+        pcpp::IPv4Address(this->syslog.syslogIP)
+    );
+    ip.getIPv4Header()->timeToLive = 20;
+    pcpp::UdpLayer udp(SYSLOG_PORT, SYSLOG_PORT);
+
+    std::string x = logger.str();
+    std::vector<uint8_t> data(x.begin(), x.end());
+    pcpp::PayloadLayer payload(&data[0], data.size(), true);
+    
+
+    pcpp::Packet datagram(100);
+    datagram.addLayer(&eth);
+    datagram.addLayer(&ip);
+    datagram.addLayer(&udp);
+    datagram.addLayer(&payload);
+    datagram.computeCalculateFields();
+
+    // ? Treba štatistiky a ACL
+    this->ports[this->syslog.iface].dev->sendPacket(&datagram);
 }
