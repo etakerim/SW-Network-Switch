@@ -27,9 +27,9 @@ void NetworkSwitch::startup()
 
     // SYSLOG defaults
     this->syslog.running = false;
-    this->syslog.iface = 0;
+    this->syslog.iface = 1;
     this->syslog.srcMAC = this->ports[syslog.iface].dev->getMacAddress().toString();
-    this->syslog.dstMAC = "18:56:80:08:94:e5";  // wlan0
+    this->syslog.dstMAC = "86:5f:f0:12:30:ab"; 
     this->syslog.srcIP = "";
     this->syslog.syslogIP = "";
 }
@@ -115,6 +115,8 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
                 this->aggregateStats(this->inboundStats, packet, i);
                 CAMRecord peer = {.port = i, .age = 0};
                 this->addMACRecord(srcMac, peer);
+            } else {
+                break;
             }
 
         } else {
@@ -171,14 +173,7 @@ void NetworkSwitch::addMACRecord(std::string mac, CAMRecord& peer)
     bool exists = this->macTable.count(mac);
 
     if (exists && this->macTable[mac].port != peer.port) {
-        auto port = this->macTable[mac].port;
-        for (auto record = this->macTable.begin(); record != this->macTable.end();) {
-            if (record->second.port == port) {
-                record = this->macTable.erase(record);
-            } else {
-                record++;
-            }
-        }
+        this->macTable.clear();
     }
     this->macTable[mac] = peer;
     this->macTableMutex.unlock();

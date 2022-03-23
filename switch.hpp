@@ -184,7 +184,8 @@ private:
     // Fixes for frame cycling and ignore for keepalive ping traffic
     std::set<std::vector<uint8_t>> duplicates;
     const std::set<std::string> macAliveTraffic{
-        "c2:04:b2:ed:00:00", "c2:05:b3:0e:00:00"
+        "c2:04:b2:ed:00:00", "c2:05:b3:0e:00:00",
+        "00:50:79:66:68:00", "00:50:79:66:68:01"
     };
 };
 
