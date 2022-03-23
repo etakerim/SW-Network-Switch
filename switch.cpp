@@ -1,7 +1,7 @@
 #include "switch.hpp"
 
 
-#define PORT_ALIVE_SEC      5
+#define PORT_ALIVE_SEC      20
 #define SYSLOG_PORT         514
 #define FACILITY_LOCAL0     16
 
@@ -26,12 +26,12 @@ void NetworkSwitch::startup()
     }
 
     // SYSLOG defaults
-    syslog.running = false;
-    syslog.iface = 0;
-    syslog.srcMAC = this->ports[syslog.iface].dev->getMacAddress().toString();
-    syslog.dstMAC = "18:56:80:08:94:e5";  // wlan0
-    syslog.srcIP = "";
-    syslog.syslogIP = "";
+    this->syslog.running = false;
+    this->syslog.iface = 0;
+    this->syslog.srcMAC = this->ports[syslog.iface].dev->getMacAddress().toString();
+    this->syslog.dstMAC = "18:56:80:08:94:e5";  // wlan0
+    this->syslog.srcIP = "";
+    this->syslog.syslogIP = "";
 }
 
 void NetworkSwitch::shutdown()
@@ -53,7 +53,7 @@ void NetworkSwitch::timer()
 
         if (this->ports[record->second.port].age >= PORT_ALIVE_SEC) {
             this->ports[record->second.port].up = false;
-             record = this->macTable.erase(record);
+            record = this->macTable.erase(record);
         } else if (record->second.age > this->macTimeout) {
             record = this->macTable.erase(record);
         } else {
@@ -64,9 +64,9 @@ void NetworkSwitch::timer()
 
     /*
     std::ostringstream s;
-            s << "Timeout of record with MAC address [" << record->first;
-            s << "] on port " << this->ifnames[record->second.port];
-            this->syslogSend(SyslogSeverity::INFORMATIONAL, s.str());
+    s << "Timeout of record with MAC address [" << record->first;
+    s << "] on port " << this->ifnames[record->second.port];
+    this->syslogSend(SyslogSeverity::INFORMATIONAL, s.str());
     */
 }
 
@@ -107,8 +107,9 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
             this->ports[i].age = 0;
             this->ports[i].up = true;
             this->macTableMutex.unlock();
-            if (ignore)
+            if (ignore) {
                 continue;
+            }
 
             if (this->checkACL(frameACL, this->inAcl[i])) {
                 this->aggregateStats(this->inboundStats, packet, i);
@@ -140,16 +141,19 @@ void NetworkSwitch::route(pcpp::Packet* packet, pcpp::PcapLiveDevice* srcPort)
 
 bool NetworkSwitch::isPacketLooping(pcpp::RawPacket* packet)
 {
+    this->mutex_duplicates.lock();
     auto data = packet->getRawData();
 	std::vector<uint8_t> serialized(data, data + packet->getRawDataLen());
 
 	if (this->duplicates.count(serialized)) {
 		this->duplicates.erase(serialized);
+        this->mutex_duplicates.unlock();
 		return true;
-	} else {
-        this->duplicates.insert(serialized);
-        return false;
-    }
+	}
+    
+    this->duplicates.insert(serialized);
+    this->mutex_duplicates.unlock();
+    return false;
 }
 
 void NetworkSwitch::clearMACTable()
@@ -165,6 +169,17 @@ void NetworkSwitch::addMACRecord(std::string mac, CAMRecord& peer)
 {
     this->macTableMutex.lock();
     bool exists = this->macTable.count(mac);
+
+    if (exists && this->macTable[mac].port != peer.port) {
+        auto port = this->macTable[mac].port;
+        for (auto record = this->macTable.begin(); record != this->macTable.end();) {
+            if (record->second.port == port) {
+                record = this->macTable.erase(record);
+            } else {
+                record++;
+            }
+        }
+    }
     this->macTable[mac] = peer;
     this->macTableMutex.unlock();
 
@@ -413,7 +428,6 @@ void NetworkSwitch::syslogSend(SyslogSeverity severity, std::string message)
     std::string x = logger.str();
     std::vector<uint8_t> data(x.begin(), x.end());
     pcpp::PayloadLayer payload(&data[0], data.size(), true);
-    
 
     pcpp::Packet datagram(100);
     datagram.addLayer(&eth);

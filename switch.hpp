@@ -159,6 +159,7 @@ public:
 
     const std::vector<std::string> ifnames{"port1", "port2"};
     SyslogClient syslog;
+    std::mutex mutex_duplicates;
 
 private:
     void frameACLPreprocess(ACLRule& frame, pcpp::Packet* packet);
