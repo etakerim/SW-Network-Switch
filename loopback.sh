@@ -8,7 +8,8 @@ ip link set port1 up
 ip link add name port2 type dummy
 ip link set port2 up
 
-ip addr add 1.1.1.8/32 dev eth0
+/var/log/syslog
+ip addr add 1.1.1.8/24 dev eth0
 
 #####CREATE###################################
 ip link add name P0 type dummy

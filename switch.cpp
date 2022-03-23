@@ -29,7 +29,7 @@ void NetworkSwitch::startup()
     this->syslog.running = false;
     this->syslog.iface = 1;
     this->syslog.srcMAC = this->ports[syslog.iface].dev->getMacAddress().toString();
-    this->syslog.dstMAC = "86:5f:f0:12:30:ab"; 
+    this->syslog.dstMAC = "42:ec:6c:4d:52:75"; 
     this->syslog.srcIP = "";
     this->syslog.syslogIP = "";
 }
@@ -174,6 +174,16 @@ void NetworkSwitch::addMACRecord(std::string mac, CAMRecord& peer)
 
     if (exists && this->macTable[mac].port != peer.port) {
         this->macTable.clear();
+    
+        /*auto port = this->macTable[mac].port;
+        for (auto record = this->macTable.begin(); record != this->macTable.end();) {
+            if (record->second.port == port) {
+                record = this->macTable.erase(record);
+            } else {
+                record++;
+            }
+        }
+        */
     }
     this->macTable[mac] = peer;
     this->macTableMutex.unlock();
@@ -376,7 +386,7 @@ bool NetworkSwitch::checkACL(ACLRule& frame, std::vector<ACLRule>& rules)
             continue;
         if (!(rule.any.dstIP || (!rule.any.dstIP && !frame.any.dstIP && rule.dstIP == frame.dstIP)))
             continue;
-        if (rule.protocol != frame.protocol)
+        if (rule.protocol != ACLProtocol::ACL_NONE && rule.protocol != frame.protocol)
             continue;
         if (rule.protocol == ACLProtocol::ACL_TCP || rule.protocol == ACLProtocol::ACL_UDP) {
 
@@ -385,7 +395,6 @@ bool NetworkSwitch::checkACL(ACLRule& frame, std::vector<ACLRule>& rules)
             if (!(rule.any.dstPort || (!rule.any.dstPort && !frame.any.dstPort && rule.dstPort == frame.dstPort)))
                 continue;
         }
-
         this->aclMutex.unlock();
         return rule.allow;
     }
